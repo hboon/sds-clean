@@ -127,7 +127,11 @@ public func parseArguments(_ arguments: [String], isTTY: Bool) throws -> CLIOpti
 
 public func parseSelection(_ text: String, candidates: [CleanupCandidate]) throws -> [CleanupCandidate] {
     let ready = candidates.filter { $0.status == .ready }
-    if text.lowercased() == "all" { return ready }
+    if text.lowercased() == "all" {
+        let nonDownloads = ready.filter { !$0.name.hasPrefix("Download:") }
+        guard !nonDownloads.isEmpty else { throw CLIError.usage("selection is empty; 'all' excludes Downloads candidates") }
+        return nonDownloads
+    }
     var seen = Set<Int>(); var chosen: [CleanupCandidate] = []
     for part in text.split(separator: ",", omittingEmptySubsequences: false) {
         guard let number = Int(part.trimmingCharacters(in: .whitespaces)),

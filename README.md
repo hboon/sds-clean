@@ -1,6 +1,6 @@
 # sds-clean
 
-`sds-clean` 0.1.0 is a local, review-first macOS cleanup CLI. It discovers a deliberately narrow set of tool-managed caches, individual Xcode DerivedData children, and up to 20 large old installer/archive files directly inside Downloads.
+`sds-clean` 0.1.0 is a local, review-first macOS cleanup CLI. It discovers a deliberately narrow set of tool-managed caches, individual Xcode DerivedData children not modified today or yesterday in the current calendar/time zone, and up to 20 large 30+ day-old installer/archive files directly inside Downloads.
 
 It does not scan Home generally, use telemetry or network calls, invoke a shell, request sudo or Full Disk Access, empty Trash, or directly delete files. Tool cleanups are permanent and opt-in. File candidates move through Foundation's native `FileManager.trashItem` API.
 
@@ -14,9 +14,9 @@ sds-clean --yes --select 1,3
 sds-clean --version
 ```
 
-Interactive runs select nothing by default and require a second exact-TTY confirmation. `--json` implies dry-run. `--yes` still requires an explicit selection and a TTY-visible plan.
+Interactive runs select nothing by default and require a second exact-TTY confirmation. `--json` implies dry-run. `--yes` still requires an explicit selection and a TTY-visible plan. `all` deliberately excludes Downloads: a Downloads candidate must be selected by its individual number. The Downloads folder itself is never a candidate, and eligible files move only to Trash.
 
-Downloads access may be denied by macOS privacy controls. That is reported as a normal skip; do not grant Full Disk Access or use sudo for this tool.
+Downloads access may be denied by macOS privacy controls. That is reported as a normal, actionable skip; do not grant Full Disk Access or use sudo for this tool. Tool notices distinguish an absent supported executable, unsupported installation layout, failed version probe, unrecognized version output, unavailable cleanup command, and an absent eligible cache scope. In every disabled state, no tool cleanup command runs.
 
 ## Development
 

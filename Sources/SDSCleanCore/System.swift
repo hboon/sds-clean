@@ -33,15 +33,35 @@ public struct FoundationTrasher: Trashing {
     public func trash(_ url: URL) throws { var resulting: NSURL?; try FileManager.default.trashItem(at: url, resultingItemURL: &resulting) }
 }
 
+private func trustedNodeBin(home: String) -> String? {
+    let root = URL(fileURLWithPath: home).appendingPathComponent(".asdf/installs/nodejs")
+    guard let versions = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return nil }
+    return versions.sorted { $0.lastPathComponent > $1.lastPathComponent }.map { $0.appendingPathComponent("bin") }.first { directory in
+        var info = stat(); let node = directory.appendingPathComponent("node").path
+        return node.withCString { stat($0, &info) } == 0 && (info.st_uid == 0 || info.st_uid == geteuid()) && info.st_mode & 0o002 == 0
+    }?.path
+}
+
 public func sanitizedEnvironment(home: String, executable: String? = nil, brew: Bool = false) -> [String: String] {
-    let trustedBin = executable?.hasPrefix("/opt/homebrew/") == true ? "/opt/homebrew/bin:" : (executable?.hasPrefix("/usr/local/") == true ? "/usr/local/bin:" : "")
-    var environment = ["HOME": home, "LANG": "C", "LC_ALL": "C", "NO_COLOR": "1", "DO_NOT_TRACK": "1", "PATH": trustedBin + "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": NSTemporaryDirectory(), "NPM_CONFIG_AUDIT": "false", "NPM_CONFIG_FUND": "false", "NPM_CONFIG_LOGS_MAX": "0", "NPM_CONFIG_UPDATE_NOTIFIER": "false", "YARN_ENABLE_TELEMETRY": "0"]
+    let trustedBin: String
+    if executable?.hasPrefix("/opt/homebrew/") == true { trustedBin = "/opt/homebrew/bin:" }
+    else if executable?.hasPrefix("/usr/local/") == true { trustedBin = "/usr/local/bin:" }
+    else if executable?.contains("/.asdf/shims/") == true { trustedBin = home + "/.asdf/shims:" + home + "/.asdf/bin:" }
+    else if executable?.contains("/.local/share/mise/shims/") == true { trustedBin = home + "/.local/share/mise/shims:" }
+    else { trustedBin = "" }
+    let runtimeBin = trustedNodeBin(home: home).map { $0 + ":" } ?? ""
+    var environment = ["HOME": home, "LANG": "C", "LC_ALL": "C", "NO_COLOR": "1", "DO_NOT_TRACK": "1", "PATH": trustedBin + runtimeBin + "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": NSTemporaryDirectory(), "NPM_CONFIG_AUDIT": "false", "NPM_CONFIG_FUND": "false", "NPM_CONFIG_LOGS_MAX": "0", "NPM_CONFIG_UPDATE_NOTIFIER": "false", "YARN_ENABLE_TELEMETRY": "0"]
     if brew { environment["HOMEBREW_NO_AUTO_UPDATE"] = "1"; environment["HOMEBREW_NO_ENV_HINTS"] = "1" }
     return environment
 }
 
-public func probeEnvironment(executable: String? = nil, brew: Bool = false) -> [String: String] {
-    sanitizedEnvironment(home: "/var/empty", executable: executable, brew: brew)
+public func probeEnvironment(home: String, executable: String? = nil, brew: Bool = false) -> [String: String] {
+    sanitizedEnvironment(home: home, executable: executable, brew: brew)
+}
+
+public func boundedDiagnostic(_ text: String, limit: Int = 240) -> String {
+    let safe = terminalSafe(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    return String(safe.prefix(limit))
 }
 
 public func identity(at url: URL, followSymlink: Bool = false) throws -> FileIdentity {

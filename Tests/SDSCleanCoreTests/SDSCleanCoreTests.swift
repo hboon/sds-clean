@@ -35,6 +35,7 @@ final class RecordingTrasher: Trashing, @unchecked Sendable {
     let yarn = allowedTools.first { $0.name == "Yarn Classic" }!
     #expect(yarn.acceptedVersion("1.22.22")); #expect(!yarn.acceptedVersion("2.4.3")); #expect(!yarn.acceptedVersion("4.1.0"))
     #expect(allowedTools.first { $0.name == "Homebrew" }!.cleanupArguments == ["cleanup", "--prune=120"])
+    #expect(allowedTools.first { $0.name == "SwiftPM" }!.helpArguments == ["package", "purge-cache", "--help"])
 }
 
 @Test func dryRunReportAndJSONDeclareZeroMutation() throws {
@@ -129,14 +130,13 @@ final class RecordingTrasher: Trashing, @unchecked Sendable {
     let runner = FakeRunner { _, arguments, environment, cwd in
         calls.values.append((arguments, environment, cwd))
         if arguments == ["--version"] { return ProcessResult(status: 0, stdout: "Apple Swift version 6.2\n", stderr: "") }
-        if arguments == ["package", "--help"] { return ProcessResult(status: 0, stdout: "purge-cache", stderr: "") }
+        if arguments == ["package", "purge-cache", "--help"] { return ProcessResult(status: 0, stdout: "purge-cache", stderr: "") }
         return ProcessResult(status: 9, stdout: "", stderr: "failed")
     }
     let outcomes = Executor(home: root, ownerID: geteuid(), runner: runner).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState())
     #expect(outcomes.first?.kind == .commandFailed); #expect(outcomes.first?.exitCode == 9)
     #expect(calls.values.last?.0 == ["package", "purge-cache"]); #expect(calls.values.allSatisfy { $0.2 == "/" })
-    #expect(calls.values.last?.1["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"); #expect(calls.values.last?.1["HOME"] == root.path)
-    #expect(calls.values.dropLast().allSatisfy { $0.1["HOME"] == "/var/empty" })
+    #expect(calls.values.last?.1["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"); #expect(calls.values.allSatisfy { $0.1["HOME"] == root.path })
     try FileManager.default.removeItem(at: root)
 }
 
@@ -157,6 +157,89 @@ final class RecordingTrasher: Trashing, @unchecked Sendable {
     let outcomes = Executor(home: root, ownerID: geteuid(), runner: runner).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState())
     #expect(outcomes.first?.kind == .invalidated); #expect(!arguments.values.contains(["package", "purge-cache"]))
     try FileManager.default.removeItem(at: root)
+}
+
+@Test func launcherLayoutsCoverAcceptedRealVariantsAndRejectEscapes() {
+    let home = URL(fileURLWithPath: "/Users/tester")
+    #expect(installationLayoutAllowed(name: "Homebrew", launcher: "/opt/homebrew/bin/brew", resolved: "/opt/homebrew/bin/brew", home: home))
+    #expect(installationLayoutAllowed(name: "npm", launcher: "/usr/local/bin/npm", resolved: "/usr/local/lib/node_modules/npm/bin/npm-cli.js", home: home))
+    #expect(installationLayoutAllowed(name: "Yarn Classic", launcher: "/opt/homebrew/bin/yarn", resolved: "/opt/homebrew/Cellar/yarn/1.22.22/bin/yarn", home: home))
+    #expect(installationLayoutAllowed(name: "pnpm", launcher: "/Users/tester/.asdf/shims/pnpm", resolved: "/Users/tester/.asdf/shims/pnpm", home: home))
+    #expect(installationLayoutAllowed(name: "pnpm", launcher: "/Users/tester/.local/share/mise/shims/pnpm", resolved: "/Users/tester/.local/share/mise/shims/pnpm", home: home))
+    #expect(!installationLayoutAllowed(name: "pnpm", launcher: "/Users/tester/bin/pnpm", resolved: "/tmp/pnpm", home: home))
+    #expect(!installationLayoutAllowed(name: "Homebrew", launcher: "/tmp/brew", resolved: "/opt/homebrew/bin/brew", home: home))
+}
+
+private func pnpmFixture(result: ProcessResult, cache: Bool = true, helpResult: ProcessResult = ProcessResult(status: 0, stdout: "store prune", stderr: "")) throws -> (URL, DiscoveryReport) {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let shim = root.appendingPathComponent(".asdf/shims/pnpm"); try FileManager.default.createDirectory(at: shim.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("#!/bin/sh\n".utf8).write(to: shim); try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shim.path)
+    if cache { try FileManager.default.createDirectory(at: root.appendingPathComponent("Library/pnpm/store"), withIntermediateDirectories: true) }
+    let overrides = Dictionary(uniqueKeysWithValues: allowedTools.map { ($0.executableNames[0], $0.name == "pnpm" ? [shim.path] : []) })
+    let runner = FakeRunner { _, arguments, environment, _ in
+        #expect(environment["HOME"] == root.path)
+        #expect(environment["PATH"]?.contains("/.asdf/shims") == true)
+        if arguments == ["store", "--help"] { return helpResult }
+        return result
+    }
+    return (root, Discoverer(home: root, runner: runner, ownerID: geteuid(), executableOverrides: overrides).discover(version: "0.1.0"))
+}
+
+@Test func probeDiagnosticsSeparateFailureMalformedValidAndAbsentScope() throws {
+    var fixture = try pnpmFixture(result: ProcessResult(status: 7, stdout: "", stderr: "node failed\n\u{1b}"))
+    #expect(fixture.1.notices.contains { $0.contains("version probe exited 7: node failed\\u{a}\\u{1b}") }); try FileManager.default.removeItem(at: fixture.0)
+    fixture = try pnpmFixture(result: ProcessResult(status: 0, stdout: "", stderr: ""))
+    #expect(fixture.1.notices.contains { $0.contains("version output was not recognized (empty output)") }); try FileManager.default.removeItem(at: fixture.0)
+    fixture = try pnpmFixture(result: ProcessResult(status: 0, stdout: "not-a-version", stderr: ""))
+    #expect(fixture.1.notices.contains { $0.contains("version output was not recognized: not-a-version") }); try FileManager.default.removeItem(at: fixture.0)
+    fixture = try pnpmFixture(result: ProcessResult(status: 0, stdout: "9.1.0", stderr: ""), helpResult: ProcessResult(status: 2, stdout: "", stderr: "unknown command"))
+    #expect(fixture.1.notices.contains { $0.contains("required cleanup command is unavailable in current help") }); try FileManager.default.removeItem(at: fixture.0)
+    fixture = try pnpmFixture(result: ProcessResult(status: 0, stdout: "9.1.0", stderr: ""), cache: false)
+    #expect(fixture.1.notices.contains { $0.contains("nothing eligible found") }); try FileManager.default.removeItem(at: fixture.0)
+    fixture = try pnpmFixture(result: ProcessResult(status: 0, stdout: "9.1.0", stderr: ""))
+    #expect(fixture.1.candidates.contains { $0.name == "pnpm" }); try FileManager.default.removeItem(at: fixture.0)
+}
+
+@Test func absenceAndUnsupportedLayoutHaveTruthfulDistinctLabels() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString); try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    var overrides = Dictionary(uniqueKeysWithValues: allowedTools.map { ($0.executableNames[0], [String]()) })
+    var report = Discoverer(home: root, executableOverrides: overrides).discover(version: "0.1.0")
+    #expect(report.notices.contains { $0.contains("executable not found in supported locations") })
+    #expect(report.notices.contains { $0.contains("Downloads: unavailable or blocked by macOS privacy controls; skipped without requesting Full Disk Access or sudo") })
+    let bad = root.appendingPathComponent("bin/pnpm"); try FileManager.default.createDirectory(at: bad.deletingLastPathComponent(), withIntermediateDirectories: true); try Data().write(to: bad); try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bad.path)
+    overrides["pnpm"] = [bad.path]; report = Discoverer(home: root, executableOverrides: overrides).discover(version: "0.1.0")
+    #expect(report.notices.contains { $0.contains("pnpm: cleanup disabled — installation layout is not supported") }); try FileManager.default.removeItem(at: root)
+}
+
+@Test func downloadsAllExclusionAndExplicitConfirmationSafety() throws {
+    let tool = CleanupCandidate(id: 1, name: "pnpm", mechanism: .permanentCommand, estimatedBytes: 1, scope: "/cache", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil)
+    let download = CleanupCandidate(id: 2, name: "Download: old.zip", mechanism: .moveToTrash, estimatedBytes: 1, scope: "/Downloads", status: .ready, reason: nil, command: nil, argv: nil, filePath: "/Downloads/old.zip", fileIdentity: nil)
+    #expect(try parseSelection("all", candidates: [tool, download]).map(\.id) == [1])
+    #expect(throws: CLIError.self) { try parseSelection("all", candidates: [download]) }
+    #expect(try parseSelection("2", candidates: [tool, download]).map(\.id) == [2])
+    #expect(!isAffirmativeConfirmation("")); #expect(!isAffirmativeConfirmation("n")); #expect(isAffirmativeConfirmation("yes"))
+    let report = DiscoveryReport(version: "x", dryRun: true, mutationPerformed: false, downloadsTotalBytes: 1, downloadsNote: "Downloads folder is never cleared; only individually listed files can be selected and moved to Trash. 'all' excludes them.", candidates: [download], notices: [])
+    #expect(renderReport(report).contains("Downloads folder is never cleared"))
+}
+
+@Test func derivedDataUsesDeterministicCalendarDaysAndRevalidates() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let parent = root.appendingPathComponent("Library/Developer/Xcode/DerivedData"); try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 8 * 3600)!
+    let now = Date(timeIntervalSince1970: 1_767_276_000) // fixed instant
+    let startToday = calendar.startOfDay(for: now); let cutoff = calendar.date(byAdding: .day, value: -1, to: startToday)!
+    for (name, date) in [("today", startToday.addingTimeInterval(1)), ("yesterday", cutoff.addingTimeInterval(1)), ("old", cutoff.addingTimeInterval(-1)), ("future", now.addingTimeInterval(86_400))] {
+        let child = parent.appendingPathComponent(name); try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true); try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: child.path)
+    }
+    let overrides = Dictionary(uniqueKeysWithValues: allowedTools.map { ($0.executableNames[0], [String]()) })
+    let report = Discoverer(home: root, now: now, calendar: calendar, executableOverrides: overrides).discover(version: "x")
+    let derived = report.candidates.filter { $0.name.hasPrefix("DerivedData:") }
+    #expect(derived.map(\.name) == ["DerivedData: old"]); #expect(report.notices.contains { $0.contains("3 top-level item(s) modified today or yesterday excluded") })
+    let discovered = try #require(derived.first); try FileManager.default.setAttributes([.modificationDate: startToday], ofItemAtPath: discovered.filePath!)
+    let recentIdentity = try identity(at: URL(fileURLWithPath: discovered.filePath!))
+    let candidate = CleanupCandidate(id: discovered.id, name: discovered.name, mechanism: discovered.mechanism, estimatedBytes: discovered.estimatedBytes, scope: discovered.scope, status: discovered.status, reason: discovered.reason, command: nil, argv: nil, filePath: discovered.filePath, fileIdentity: recentIdentity)
+    let trasher = RecordingTrasher(); let outcomes = Executor(home: root, trasher: trasher, now: now, calendar: calendar).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState())
+    #expect(outcomes.first?.kind == .invalidated); #expect(outcomes.first?.detail.contains("recent-modification eligibility") == true); #expect(trasher.paths.isEmpty); try FileManager.default.removeItem(at: root)
 }
 
 @Test func anyPlanDriftPreventsEarlierValidTrashItem() throws {
