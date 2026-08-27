@@ -35,7 +35,7 @@ final class RecordingTrasher: Trashing, @unchecked Sendable {
     let yarn = allowedTools.first { $0.name == "Yarn Classic" }!
     #expect(yarn.acceptedVersion("1.22.22")); #expect(!yarn.acceptedVersion("2.4.3")); #expect(!yarn.acceptedVersion("4.1.0"))
     #expect(allowedTools.first { $0.name == "Homebrew" }!.cleanupArguments == ["cleanup", "--prune=120"])
-    #expect(allowedTools.first { $0.name == "SwiftPM" }!.helpArguments == ["package", "purge-cache", "--help"])
+    #expect(allowedTools.first { $0.name == "SwiftPM" }!.helpArguments == ["package", "help", "purge-cache"])
 }
 
 @Test func dryRunReportAndJSONDeclareZeroMutation() throws {
@@ -130,7 +130,7 @@ final class RecordingTrasher: Trashing, @unchecked Sendable {
     let runner = FakeRunner { _, arguments, environment, cwd in
         calls.values.append((arguments, environment, cwd))
         if arguments == ["--version"] { return ProcessResult(status: 0, stdout: "Apple Swift version 6.2\n", stderr: "") }
-        if arguments == ["package", "purge-cache", "--help"] { return ProcessResult(status: 0, stdout: "purge-cache", stderr: "") }
+        if arguments == ["package", "help", "purge-cache"] { return ProcessResult(status: 0, stdout: "purge-cache", stderr: "") }
         return ProcessResult(status: 9, stdout: "", stderr: "failed")
     }
     let outcomes = Executor(home: root, ownerID: geteuid(), runner: runner).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState())
