@@ -7,9 +7,9 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 let help = """
 Usage: sds-clean [--dry-run | --json | --delete]
 
-Safely discover selected tool caches and an aggregate of Xcode DerivedData items
-not modified today or yesterday. Downloads is shown once for information; this
-Downloads includes only eligible old top-level installer/archive files.
+Safely discover supported tool caches and an aggregate of Xcode DerivedData items
+not modified today or yesterday. Downloads is one aggregate containing only
+eligible old top-level installer/archive files.
 
   --dry-run             discover and print the full report; never mutate
   --json                stable JSON report; implies --dry-run
@@ -45,10 +45,18 @@ do {
     var failures = 0; var cleaned = 0
     print("\nResults:")
     for outcome in outcomes {
-        let estimates = "before \(byteString(outcome.beforeEstimateBytes)); after \(byteString(outcome.afterEstimateBytes))"
+        let candidate = plan.candidates.first { $0.id == outcome.candidateID }
+        let measurements: String
+        if candidate?.mechanism == .moveToTrash, outcome.kind == .trashed {
+            measurements = "planned Trash bytes \(byteString(outcome.beforeEstimateBytes)); moved to Trash"
+        } else if candidate?.mechanism == .moveToTrash {
+            measurements = "planned Trash bytes \(byteString(outcome.beforeEstimateBytes)); bytes not moved \(byteString(outcome.afterEstimateBytes))"
+        } else {
+            measurements = "measured cache before \(byteString(outcome.beforeEstimateBytes)); measured cache after \(byteString(outcome.afterEstimateBytes))"
+        }
         let counts = outcome.succeededItemCount.map { " — \($0) succeeded, \(outcome.failedItemCount ?? 0) failed, \(outcome.notRunItemCount ?? 0) not run" } ?? ""
-        let name = plan.candidates.first { $0.id == outcome.candidateID }?.name ?? "Cleanup item"
-        print("- \(terminalSafe(name)): \(outcome.kind.rawValue)\(counts) — \(estimates) — \(terminalSafe(outcome.detail))")
+        let name = candidate?.name ?? "Cleanup item"
+        print("- \(terminalSafe(name)): \(outcome.kind.rawValue)\(counts) — \(measurements) — \(terminalSafe(outcome.detail))")
         if outcome.kind == .commandSucceeded || outcome.kind == .trashed { cleaned += 1 }; if outcome.kind == .commandFailed || outcome.kind == .invalidated { failures += 1 }
     }
     if !outcomes.isEmpty { print("Inspect Trash before emptying it.") }

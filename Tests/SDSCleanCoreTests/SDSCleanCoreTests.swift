@@ -105,6 +105,8 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     let report = DiscoveryReport(version: "0.1.0", dryRun: true, mutationPerformed: false, candidates: candidates, notices: Array(repeating: "notice", count: 100))
     #expect(renderReport(report).components(separatedBy: "\n").count < 1_000)
     #expect(renderPlan(ExecutionPlan(candidates: Array(candidates.prefix(1)))).contains("Move to Trash"))
+    #expect(renderReport(report).contains("bytes moving to Trash"))
+    #expect(!renderReport(report).contains("total size"))
     #expect(terminalSafe("bad\nname\u{1b}") == "bad\\u{a}name\\u{1b}")
 }
 
@@ -255,8 +257,17 @@ private func pnpmFixture(result: ProcessResult, cache: Bool = true, helpResult: 
     let report = DiscoveryReport(version: "x", dryRun: true, mutationPerformed: false, candidates: [candidate], notices: [])
     let dryLines = renderReport(report, dryRun: true).components(separatedBy: "\n")
     let deleteLines = renderReport(report, dryRun: false).components(separatedBy: "\n")
-    #expect(Array(dryLines.dropFirst().dropLast()) == Array(deleteLines.dropFirst().dropLast()))
+    #expect(Array(dryLines.dropLast(2)) == deleteLines)
+    #expect(dryLines.first == "sds-clean x — Cleanup plan")
     #expect(dryLines.last == "This is a dry run; no files will be deleted.")
+}
+
+@Test func homebrewOutputSeparatesMeasuredCacheFromBroaderCleanupEstimate() {
+    let candidate = CleanupCandidate(id: 1, name: "Homebrew", mechanism: .permanentCommand, currentScopeBytes: 298_500_000, estimatedReclaimBytes: 346_100_000, trashMoveBytes: nil, estimateBasis: "reported by brew cleanup --prune=120 --dry-run", scope: "/Users/test/Library/Caches/Homebrew", status: .ready, reason: nil, command: nil, argv: ["/opt/homebrew/bin/brew", "cleanup", "--prune=120"], filePath: nil, fileIdentity: nil)
+    let output = renderReport(DiscoveryReport(version: "x", dryRun: true, mutationPerformed: false, candidates: [candidate], notices: []))
+    #expect(output.contains("measured Homebrew cache 298.5 MB | Homebrew cleanup estimate 346.1 MB"))
+    #expect(output.contains("estimate can include old formula versions and other stale data outside the measured cache"))
+    #expect(!output.contains("current scope")); #expect(!output.contains("estimated reclaim"))
 }
 
 @Test func homebrewDryRunParserIsStrictAndUsesDecimalUnits() {

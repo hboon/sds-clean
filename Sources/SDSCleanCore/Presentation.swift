@@ -12,18 +12,20 @@ sds-clean chooses a mode explicitly.
 public func byteString(_ bytes: UInt64?) -> String { guard let bytes else { return "unknown" }; return ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file) }
 
 public func renderReport(_ report: DiscoveryReport, dryRun: Bool = true) -> String {
-    let status = dryRun ? "DRY RUN" : "COMPLETE CLEANUP PLAN"
-    var lines = ["sds-clean \(report.version) — \(status)", "", "Overall estimate for this complete plan:", "  Permanent cleanup: \(byteString(report.estimatedPermanentReclaimBytes)) estimated reclaim"]
+    var lines = ["sds-clean \(report.version) — Cleanup plan", "", "Plan totals:", "  Permanent tool cleanup estimate: \(byteString(report.estimatedPermanentReclaimBytes))"]
     if report.unestimatedPermanentCandidateCount > 0 { lines.append("  Plus \(report.unestimatedPermanentCandidateCount) permanent command(s) with no reliable reclaim estimate (excluded from total)") }
     lines.append("  Move to Trash: \(byteString(report.plannedTrashBytes)) (recoverable; not freed until Trash is emptied)")
-    if report.unestimatedTrashSelectionCount > 0 { lines.append("  Plus \(report.unestimatedTrashSelectionCount) Trash selection(s) with unknown size (excluded from subtotal)") }
+    if report.unestimatedTrashSelectionCount > 0 { lines.append("  Plus \(report.unestimatedTrashSelectionCount) Trash item(s) with unknown size (excluded from subtotal)") }
     lines += ["", "Permanent tool cleanup (files are removed permanently):"]
     let permanent = report.candidates.filter { $0.mechanism == .permanentCommand }
     if permanent.isEmpty { lines.append("  (none)") }
     for candidate in permanent {
-        lines.append("- \(terminalSafe(candidate.name)) | current scope \(byteString(candidate.currentScopeBytes)) | estimated reclaim \(byteString(candidate.estimatedReclaimBytes))")
-        lines.append("   scope: \(terminalSafe(candidate.scope))")
-        lines.append("   estimate: \(terminalSafe(candidate.estimateBasis))")
+        let measuredLabel = candidate.name == "Homebrew" ? "measured Homebrew cache" : "measured cache"
+        let estimateLabel = candidate.name == "Homebrew" ? "Homebrew cleanup estimate" : "cleanup estimate"
+        lines.append("- \(terminalSafe(candidate.name)) | \(measuredLabel) \(byteString(candidate.currentScopeBytes)) | \(estimateLabel) \(byteString(candidate.estimatedReclaimBytes))")
+        lines.append("   measured path: \(terminalSafe(candidate.scope))")
+        lines.append("   estimate basis: \(terminalSafe(candidate.estimateBasis))")
+        if candidate.name == "Homebrew" { lines.append("   note: Homebrew's estimate can include old formula versions and other stale data outside the measured cache.") }
         if let command = candidate.command { lines.append("   executable: \(terminalSafe(command.path)) (\(terminalSafe(command.version).prefix(160)))") }
         if let argv = candidate.argv { lines.append("   argv: \(argv.map(shellDisplay).joined(separator: " "))") }
     }
@@ -32,11 +34,12 @@ public func renderReport(_ report: DiscoveryReport, dryRun: Bool = true) -> Stri
     if trash.isEmpty { lines.append("  (none)") }
     for candidate in trash {
         let count = candidate.eligibleItemCount.map { " | \($0) eligible item(s)" } ?? ""
-        lines.append("- \(terminalSafe(candidate.name))\(count) | total size \(byteString(candidate.trashMoveBytes))")
+        lines.append("- \(terminalSafe(candidate.name))\(count) | bytes moving to Trash \(byteString(candidate.trashMoveBytes))")
         if let path = candidate.filePath { lines.append("   item: \(terminalSafe(path))") }
+        else { lines.append("   eligible items under: \(terminalSafe(candidate.scope))") }
     }
     if !report.notices.isEmpty { lines.append(""); lines.append("Notices:"); lines += report.notices.prefix(80).map { "- \(terminalSafe($0))" } }
-    lines.append(""); lines.append(dryRun ? "This is a dry run; no files will be deleted." : "Nothing has changed yet.")
+    if dryRun { lines.append(""); lines.append("This is a dry run; no files will be deleted.") }
     return lines.joined(separator: "\n")
 }
 
@@ -45,9 +48,9 @@ public func renderPlan(_ plan: ExecutionPlan) -> String {
     let unknown = plan.candidates.filter { $0.mechanism == .permanentCommand && $0.estimatedReclaimBytes == nil }.count
     let trashBytes = plan.candidates.compactMap { $0.mechanism == .moveToTrash ? $0.trashMoveBytes : nil }.reduce(0, &+)
     let unknownTrash = plan.candidates.filter { $0.mechanism == .moveToTrash && $0.trashMoveBytes == nil }.count
-    var lines = ["Planned cleanup", "Estimated permanent reclaim: \(byteString(permanentEstimate))\(unknown > 0 ? " plus \(unknown) unestimated command(s)" : "")", "Move to Trash: \(byteString(trashBytes))\(unknownTrash > 0 ? " plus \(unknownTrash) selection(s) with unknown size" : "") (not freed until Trash is emptied)", "Permanent commands:"]
+    var lines = ["Cleanup plan", "Permanent tool cleanup estimate: \(byteString(permanentEstimate))\(unknown > 0 ? " plus \(unknown) unestimated command(s)" : "")", "Move to Trash: \(byteString(trashBytes))\(unknownTrash > 0 ? " plus \(unknownTrash) item(s) with unknown size" : "") (not freed until Trash is emptied)", "Permanent commands:"]
     let commands = plan.candidates.filter { $0.mechanism == .permanentCommand }
-    lines += commands.isEmpty ? ["  (none)"] : commands.map { "  - \(($0.argv ?? []).map(shellDisplay).joined(separator: " ")) | identity \($0.command?.device ?? 0):\($0.command?.inode ?? 0) | estimated reclaim \(byteString($0.estimatedReclaimBytes))" }
+    lines += commands.isEmpty ? ["  (none)"] : commands.map { "  - \(($0.argv ?? []).map(shellDisplay).joined(separator: " ")) | identity \($0.command?.device ?? 0):\($0.command?.inode ?? 0) | cleanup estimate \(byteString($0.estimatedReclaimBytes))" }
     lines.append("Move to Trash:")
     let files = plan.candidates.filter { $0.mechanism == .moveToTrash }
     lines += files.isEmpty ? ["  (none)"] : files.map {
