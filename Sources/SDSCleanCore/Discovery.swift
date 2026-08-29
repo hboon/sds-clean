@@ -132,18 +132,19 @@ public struct Discoverer {
         let parent = home.appendingPathComponent("Downloads").standardizedFileURL
         guard let children = try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: [.isRegularFileKey, .isPackageKey, .isAliasFileKey], options: []) else { notices.append("Downloads: unavailable or blocked by macOS privacy controls; skipped without requesting Full Disk Access or sudo") ; return }
         let parentIdentity = try? identity(at: parent); let homeIdentity = try? identity(at: home); let cutoff = now.addingTimeInterval(-30 * 86_400)
-        var total: UInt64 = 0; var eligible: [(URL, FileIdentity)] = []
+        var eligible: [TrashMember] = []
         let suffixes = [".dmg", ".pkg", ".xip", ".iso", ".zip", ".tar", ".tgz", ".tar.gz", ".tar.bz2", ".tar.xz", ".7z", ".rar"]
-        for child in children {
+        for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             guard let item = try? identity(at: child), item.ownerID == ownerID, item.device == parentIdentity?.device, parentIdentity?.device == homeIdentity?.device, !isSymlink(item, at: child) else { continue }
             let values = try? child.resourceValues(forKeys: [.isRegularFileKey, .isPackageKey, .isAliasFileKey])
             guard values?.isRegularFile == true, values?.isPackage != true, values?.isAliasFile != true else { continue }
-            total &+= item.size; let name = child.lastPathComponent; let lower = name.lowercased()
+            let name = child.lastPathComponent; let lower = name.lowercased()
             guard !name.hasPrefix("."), !lower.hasSuffix(".download"), !lower.hasSuffix(".crdownload"), !lower.hasSuffix(".part"), item.modified <= cutoff, suffixes.contains(where: { lower.hasSuffix($0) }) else { continue }
-            eligible.append((child, item))
+            eligible.append(TrashMember(path: child.path, identity: item, bytes: item.size))
         }
-        let eligibleBytes = eligible.map { $0.1.size }.reduce(0, &+)
-        candidates.append(CleanupCandidate(id: startingID, name: "Downloads", mechanism: .reportOnly, currentScopeBytes: directorySize(parent, ownerID: ownerID) ?? total, estimatedReclaimBytes: nil, trashMoveBytes: nil, estimateBasis: "\(eligible.count) old installer/archive file(s) total \(byteString(eligibleBytes))", scope: parent.path, status: .reportOnly, reason: "Shown for information only. sds-clean will not clean or move anything in Downloads.", command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: eligible.count, eligibleItemBytes: eligibleBytes)); startingID += 1
+        guard !eligible.isEmpty else { notices.append("Downloads: no eligible old top-level installer or archive files found"); return }
+        let eligibleBytes = eligible.compactMap(\.bytes).reduce(0, &+)
+        candidates.append(CleanupCandidate(id: startingID, name: "Downloads", mechanism: .moveToTrash, currentScopeBytes: eligibleBytes, estimatedReclaimBytes: nil, trashMoveBytes: eligibleBytes, estimateBasis: "\(eligible.count) eligible old top-level installer/archive file(s); each file moves separately to Trash", scope: parent.path, status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: eligible.count, eligibleItemBytes: eligibleBytes, executionMembers: eligible)); startingID += 1
     }
 }
 

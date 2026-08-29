@@ -97,7 +97,8 @@ public struct Executor {
         else if invalidated { kind = .invalidated }
         else if failed > 0 { kind = .commandFailed }
         else { kind = .trashed }
-        let detail = "DerivedData aggregate: \(succeeded) item(s) moved separately to Trash, \(failed) failed, \(notRun) not run; the DerivedData folder was not moved"
+        let rootName = candidate.name == "Downloads" ? "Downloads folder" : "DerivedData folder"
+        let detail = "\(candidate.name) aggregate: \(succeeded) item(s) moved separately to Trash, \(failed) failed, \(notRun) not run; the \(rootName) was not moved"
         let afterBytes: UInt64? = failed + notRun > 0 && remainingSizeKnown ? remainingBytes : nil
         return ItemOutcome(candidateID: candidate.id, kind: kind, exitCode: nil, beforeEstimateBytes: candidate.trashMoveBytes, afterEstimateBytes: afterBytes, detail: detail, succeededItemCount: succeeded, failedItemCount: failed, notRunItemCount: notRun)
     }

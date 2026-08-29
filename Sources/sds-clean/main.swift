@@ -5,17 +5,15 @@ import SDSCleanCore
 let isTTY = isatty(STDIN_FILENO) == 1 && isatty(STDOUT_FILENO) == 1
 let arguments = Array(CommandLine.arguments.dropFirst())
 let help = """
-Usage: sds-clean [--dry-run | --json | --delete [--yes --select <numbers|all>]]
+Usage: sds-clean [--dry-run | --json | --delete]
 
 Safely discover selected tool caches and an aggregate of Xcode DerivedData items
 not modified today or yesterday. Downloads is shown once for information; this
-CLI will not clean or move anything in Downloads. Nothing is selected by default.
+Downloads includes only eligible old top-level installer/archive files.
 
   --dry-run             discover and print the full report; never mutate
   --json                stable JSON report; implies --dry-run
-  --delete              start interactive selection, confirmation, and cleanup
-  --delete --yes --select VALUE
-                        execute a fully visible plan on a TTY (VALUE: numbers or all)
+  --delete              show the complete plan, then confirm or cancel on a TTY
   --help                show this help
   --version             show version
 """
@@ -35,20 +33,10 @@ do {
     }
     print(renderReport(report, dryRun: options.dryRun))
     if !options.delete { finish(.success) }
-    let selectionText: String
-    if options.yes { selectionText = options.selection! }
-    else {
-        print("\nSelect candidate numbers separated by commas, or all. Empty input cancels: ", terminator: ""); fflush(stdout)
-        guard let input = readLine(), !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { print("Cancelled. Nothing changed."); finish(.success) }
-        selectionText = input
-    }
-    let selected = try parseSelection(selectionText, candidates: report.candidates)
-    let plan = ExecutionPlan(candidates: selected)
-    print("\n\(renderPlan(plan))")
-    if !options.yes {
-        print("\nRun exactly the numbered plan above? Permanent commands cannot be undone; other items move to Trash. [y/N]: ", terminator: ""); fflush(stdout)
-        guard isAffirmativeConfirmation(readLine()) else { print("Cancelled. Nothing changed."); finish(.success) }
-    }
+    let plan = ExecutionPlan(candidates: report.candidates.filter { $0.status == .ready })
+    guard !plan.candidates.isEmpty else { print("\nNothing eligible to clean."); finish(.success) }
+    print("\nRun the complete plan above? Permanent commands cannot be undone; other items move to Trash. [y/N]: ", terminator: ""); fflush(stdout)
+    guard isAffirmativeConfirmation(readLine()) else { print("Cancelled. Nothing changed."); finish(.success) }
     let cancellation = CancellationState()
     signal(SIGINT, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
@@ -59,7 +47,8 @@ do {
     for outcome in outcomes {
         let estimates = "before \(byteString(outcome.beforeEstimateBytes)); after \(byteString(outcome.afterEstimateBytes))"
         let counts = outcome.succeededItemCount.map { " — \($0) succeeded, \(outcome.failedItemCount ?? 0) failed, \(outcome.notRunItemCount ?? 0) not run" } ?? ""
-        print("- \(outcome.candidateID): \(outcome.kind.rawValue)\(counts) — \(estimates) — \(terminalSafe(outcome.detail))")
+        let name = plan.candidates.first { $0.id == outcome.candidateID }?.name ?? "Cleanup item"
+        print("- \(terminalSafe(name)): \(outcome.kind.rawValue)\(counts) — \(estimates) — \(terminalSafe(outcome.detail))")
         if outcome.kind == .commandSucceeded || outcome.kind == .trashed { cleaned += 1 }; if outcome.kind == .commandFailed || outcome.kind == .invalidated { failures += 1 }
     }
     if !outcomes.isEmpty { print("Inspect Trash before emptying it.") }

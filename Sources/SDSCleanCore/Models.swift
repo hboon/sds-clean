@@ -1,7 +1,7 @@
 import Foundation
 
-public enum Mechanism: String, Codable, Sendable { case permanentCommand, moveToTrash, reportOnly }
-public enum CandidateStatus: String, Codable, Sendable { case ready, reportOnly, skipped }
+public enum Mechanism: String, Codable, Sendable { case permanentCommand, moveToTrash }
+public enum CandidateStatus: String, Codable, Sendable { case ready, skipped }
 
 public struct FileIdentity: Codable, Equatable, Sendable {
     public let device: UInt64
@@ -77,17 +77,17 @@ public struct DiscoveryReport: Codable, Sendable {
     public let mutationPerformed: Bool
     public let estimatedPermanentReclaimBytes: UInt64
     public let unestimatedPermanentCandidateCount: Int
-    public let bytesMovedToTrash: UInt64
-    public let unestimatedTrashCandidateCount: Int
+    public let plannedTrashBytes: UInt64
+    public let unestimatedTrashSelectionCount: Int
     public let candidates: [CleanupCandidate]
     public let notices: [String]
-    public init(schemaVersion: Int = 3, version: String, dryRun: Bool, mutationPerformed: Bool, candidates: [CleanupCandidate], notices: [String]) {
+    public init(schemaVersion: Int = 4, version: String, dryRun: Bool, mutationPerformed: Bool, candidates: [CleanupCandidate], notices: [String]) {
         self.schemaVersion = schemaVersion; self.version = version; self.dryRun = dryRun; self.mutationPerformed = mutationPerformed
         let ready = candidates.filter { $0.status == .ready }
         self.estimatedPermanentReclaimBytes = ready.compactMap { $0.mechanism == .permanentCommand ? $0.estimatedReclaimBytes : nil }.reduce(0, &+)
         self.unestimatedPermanentCandidateCount = ready.filter { $0.mechanism == .permanentCommand && $0.estimatedReclaimBytes == nil }.count
-        self.bytesMovedToTrash = ready.compactMap { $0.mechanism == .moveToTrash ? $0.trashMoveBytes : nil }.reduce(0, &+)
-        self.unestimatedTrashCandidateCount = ready.filter { $0.mechanism == .moveToTrash && $0.trashMoveBytes == nil }.count
+        self.plannedTrashBytes = ready.compactMap { $0.mechanism == .moveToTrash ? $0.trashMoveBytes : nil }.reduce(0, &+)
+        self.unestimatedTrashSelectionCount = ready.filter { $0.mechanism == .moveToTrash && $0.trashMoveBytes == nil }.count
         self.candidates = candidates; self.notices = notices
     }
 }
@@ -120,8 +120,6 @@ public struct CLIOptions: Equatable {
     public var dryRun = false
     public var json = false
     public var delete = false
-    public var yes = false
-    public var selection: String?
     public var help = false
     public var version = false
     public init() {}
@@ -139,11 +137,6 @@ public func parseArguments(_ arguments: [String], isTTY: Bool) throws -> CLIOpti
         case "--dry-run": result.dryRun = true; modes.insert("dry-run")
         case "--json": result.json = true; result.dryRun = true; modes.insert("json")
         case "--delete": result.delete = true; modes.insert("delete")
-        case "--yes": result.yes = true
-        case "--select":
-            index += 1
-            guard index < arguments.count, !arguments[index].hasPrefix("--") else { throw CLIError.usage("--select requires numbers or all") }
-            result.selection = arguments[index]
         case "--help", "-h": result.help = true
         case "--version": result.version = true
         default: throw CLIError.usage("unknown option: \(arguments[index])")
@@ -155,28 +148,8 @@ public func parseArguments(_ arguments: [String], isTTY: Bool) throws -> CLIOpti
         return result
     }
     guard modes.count <= 1 else { throw CLIError.usage("choose exactly one mode: --dry-run, --json, or --delete") }
-    if result.yes && result.selection == nil { throw CLIError.usage("--yes requires --select <numbers|all>") }
-    if result.selection != nil && !result.yes { throw CLIError.usage("--select is only valid with --yes") }
-    if (result.yes || result.selection != nil) && !result.delete { throw CLIError.usage("--yes and --select require --delete") }
-    if result.yes && !isTTY { throw CLIError.usage("--yes cleanup requires an interactive TTY") }
     if result.delete && !isTTY { throw CLIError.usage("--delete requires an interactive TTY") }
     return result
-}
-
-public func parseSelection(_ text: String, candidates: [CleanupCandidate]) throws -> [CleanupCandidate] {
-    let ready = candidates.filter { $0.status == .ready }
-    if text.lowercased() == "all" {
-        guard !ready.isEmpty else { throw CLIError.usage("selection is empty") }
-        return ready
-    }
-    var seen = Set<Int>(); var chosen: [CleanupCandidate] = []
-    for part in text.split(separator: ",", omittingEmptySubsequences: false) {
-        guard let number = Int(part.trimmingCharacters(in: .whitespaces)),
-              let candidate = ready.first(where: { $0.id == number }) else { throw CLIError.usage("invalid candidate selection: \(part)") }
-        if seen.insert(number).inserted { chosen.append(candidate) }
-    }
-    guard !chosen.isEmpty else { throw CLIError.usage("selection is empty") }
-    return chosen.sorted { $0.id < $1.id }
 }
 
 public func isAffirmativeConfirmation(_ text: String?) -> Bool {

@@ -41,18 +41,12 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     #expect(throws: CLIError.self) { try parseArguments(["--dry-run", "--delete"], isTTY: true) }
     #expect(throws: CLIError.self) { try parseArguments(["--dry-run", "--json"], isTTY: false) }
     #expect(throws: CLIError.self) { try parseArguments(["--help", "--dry-run"], isTTY: false) }
-    #expect(try parseArguments(["--delete", "--yes", "--select", "all"], isTTY: true).selection == "all")
+    #expect(throws: CLIError.self) { try parseArguments(["--delete", "--yes"], isTTY: true) }
+    #expect(throws: CLIError.self) { try parseArguments(["--delete", "--select", "all"], isTTY: true) }
     #expect(modeSummary.components(separatedBy: "\n").count == 3); #expect(modeSummary.contains("--dry-run")); #expect(modeSummary.contains("--delete"))
     #expect(!isAffirmativeConfirmation(nil)); #expect(!isAffirmativeConfirmation("")); #expect(!isAffirmativeConfirmation(" yes")); #expect(!isAffirmativeConfirmation("yes "))
     #expect(isAffirmativeConfirmation("y")); #expect(isAffirmativeConfirmation("yes")); #expect(!isAffirmativeConfirmation("YES"))
     #expect(ExitCode.success.rawValue == 0); #expect(ExitCode.usage.rawValue == 2); #expect(ExitCode.partial.rawValue == 3); #expect(ExitCode.invalidated.rawValue == 4); #expect(ExitCode.cancelled.rawValue == 130)
-}
-
-@Test func selectionIsExplicitAndBounded() throws {
-    let candidates = (1...3).map { trashFixture(id: $0, name: "\($0)", bytes: 1, scope: "/tmp", filePath: "/tmp/\($0)") }
-    #expect(try parseSelection("3,1,3", candidates: candidates).map(\.id) == [1, 3])
-    #expect(throws: CLIError.self) { try parseSelection("", candidates: candidates) }
-    #expect(throws: CLIError.self) { try parseSelection("4", candidates: candidates) }
 }
 
 @Test func allowlistIsExactAndYarnClassicOnly() {
@@ -65,9 +59,9 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
 
 @Test func dryRunReportAndJSONDeclareZeroMutation() throws {
     let report = DiscoveryReport(version: "0.1.0", dryRun: true, mutationPerformed: false, candidates: [], notices: [])
-    #expect(renderReport(report).contains("No mutations performed."))
+    #expect(renderReport(report).hasSuffix("This is a dry run; no files will be deleted."))
     let data = try JSONEncoder().encode(report); let decoded = try JSONDecoder().decode(DiscoveryReport.self, from: data)
-    #expect(decoded.schemaVersion == 3); #expect(decoded.mutationPerformed == false); #expect(decoded.dryRun)
+    #expect(decoded.schemaVersion == 4); #expect(decoded.mutationPerformed == false); #expect(decoded.dryRun)
 }
 
 @Test func promoIsRestrained() {
@@ -127,15 +121,23 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     let report = Discoverer(home: root, runner: FakeRunner { _, _, _, _ in ProcessResult(status: 1, stdout: "", stderr: "") }, ownerID: geteuid()).discover(version: "0.1.0")
     let downloadsCandidates = report.candidates.filter { $0.name == "Downloads" }
     #expect(downloadsCandidates.count == 1)
-    #expect(downloadsCandidates.first?.status == .reportOnly)
-    #expect(downloadsCandidates.first?.currentScopeBytes == 410)
+    #expect(downloadsCandidates.first?.status == .ready); #expect(downloadsCandidates.first?.mechanism == .moveToTrash)
+    #expect(downloadsCandidates.first?.currentScopeBytes == 50)
     #expect(downloadsCandidates.first?.eligibleItemCount == 1)
     #expect(downloadsCandidates.first?.eligibleItemBytes == 50)
     #expect(!renderReport(report).contains("eligible.ZIP"))
+    #expect(!String(decoding: try JSONEncoder().encode(report), as: UTF8.self).contains("eligible.ZIP"))
+    let aggregate = try #require(downloadsCandidates.first); let trasher = RecordingTrasher()
+    let outcome = try #require(Executor(home: root, ownerID: geteuid(), trasher: trasher).execute(ExecutionPlan(candidates: [aggregate]), cancellation: CancellationState()).first)
+    #expect(outcome.kind == .trashed); #expect(outcome.succeededItemCount == 1); #expect(trasher.paths.map { URL(fileURLWithPath: $0).lastPathComponent } == ["eligible.ZIP"])
+    #expect(!trasher.paths.contains { URL(fileURLWithPath: $0).lastPathComponent == "Downloads" })
+    try Data(repeating: 2, count: 51).write(to: downloads.appendingPathComponent("eligible.ZIP"))
+    let driftTrasher = RecordingTrasher(); let driftOutcome = try #require(Executor(home: root, ownerID: geteuid(), trasher: driftTrasher).execute(ExecutionPlan(candidates: [aggregate]), cancellation: CancellationState()).first)
+    #expect(driftOutcome.kind == .invalidated); #expect(driftTrasher.paths.isEmpty)
     try FileManager.default.removeItem(at: root)
 }
 
-@Test func downloadsDiscoveryIsOneUnselectableAggregateWithoutItemNames() throws {
+@Test func downloadsDiscoveryIsOneAggregateWithoutItemNames() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let downloads = root.appendingPathComponent("Downloads"); try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
     let old = Date().addingTimeInterval(-31 * 86_400)
@@ -145,7 +147,7 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     let report = Discoverer(home: root, ownerID: geteuid()).discover(version: "0.1.0")
     let downloadRows = report.candidates.filter { $0.name == "Downloads" }
     #expect(downloadRows.count == 1); #expect(downloadRows.first?.eligibleItemCount == 25)
-    #expect(downloadRows.first?.status == .reportOnly); #expect(downloadRows.first?.mechanism == .reportOnly)
+    #expect(downloadRows.first?.status == .ready); #expect(downloadRows.first?.mechanism == .moveToTrash)
     #expect(!renderReport(report).contains("25.zip")); #expect(!renderReport(report).contains("1.zip"))
     try FileManager.default.removeItem(at: root)
 }
@@ -174,7 +176,7 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
 @Test func stableJSONHasDocumentedTopLevelKeys() throws {
     let report = DiscoveryReport(version: "0.1.0", dryRun: true, mutationPerformed: false, candidates: [], notices: [])
     let object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(report)) as? [String: Any])
-    #expect(Set(object.keys) == ["schemaVersion", "version", "dryRun", "mutationPerformed", "estimatedPermanentReclaimBytes", "unestimatedPermanentCandidateCount", "bytesMovedToTrash", "unestimatedTrashCandidateCount", "candidates", "notices"])
+    #expect(Set(object.keys) == ["schemaVersion", "version", "dryRun", "mutationPerformed", "estimatedPermanentReclaimBytes", "unestimatedPermanentCandidateCount", "plannedTrashBytes", "unestimatedTrashSelectionCount", "candidates", "notices"])
 }
 
 @Test func helpDriftInvalidatesBeforeCommandExecution() throws {
@@ -242,16 +244,19 @@ private func pnpmFixture(result: ProcessResult, cache: Bool = true, helpResult: 
     #expect(report.notices.contains { $0.contains("pnpm: cleanup disabled — installation layout is not supported") }); try FileManager.default.removeItem(at: root)
 }
 
-@Test func downloadsAggregateCannotEnterAPlan() throws {
-    let tool = toolFixture(id: 1, name: "pnpm", bytes: 1, scope: "/cache")
-    let download = CleanupCandidate(id: 2, name: "Downloads", mechanism: .reportOnly, currentScopeBytes: 100, estimatedReclaimBytes: nil, trashMoveBytes: nil, estimateBasis: "aggregate", scope: "/Downloads", status: .reportOnly, reason: "Shown for information only. sds-clean will not clean or move anything in Downloads.", command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: 1)
-    #expect(try parseSelection("all", candidates: [tool, download]).map(\.id) == [1])
-    #expect(throws: CLIError.self) { try parseSelection("all", candidates: [download]) }
-    #expect(throws: CLIError.self) { try parseSelection("2", candidates: [tool, download]) }
+@Test func completePlanHasNoPartialSelectionSurface() throws {
     #expect(!isAffirmativeConfirmation("")); #expect(!isAffirmativeConfirmation("n")); #expect(isAffirmativeConfirmation("yes"))
-    let report = DiscoveryReport(version: "x", dryRun: true, mutationPerformed: false, candidates: [download], notices: [])
-    #expect(renderReport(report).contains("Downloads information:"))
-    #expect(renderReport(report).contains("will not clean or move anything in Downloads"))
+    #expect(throws: CLIError.self) { try parseArguments(["--delete", "--select", "1"], isTTY: true) }
+    #expect(throws: CLIError.self) { try parseArguments(["--delete", "--yes"], isTTY: true) }
+}
+
+@Test func dryRunAndDeleteRenderTheSamePlanBody() {
+    let candidate = CleanupCandidate(id: 1, name: "Downloads", mechanism: .moveToTrash, currentScopeBytes: 42, estimatedReclaimBytes: nil, trashMoveBytes: 42, estimateBasis: "2 eligible files", scope: "/Downloads", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: 2, eligibleItemBytes: 42)
+    let report = DiscoveryReport(version: "x", dryRun: true, mutationPerformed: false, candidates: [candidate], notices: [])
+    let dryLines = renderReport(report, dryRun: true).components(separatedBy: "\n")
+    let deleteLines = renderReport(report, dryRun: false).components(separatedBy: "\n")
+    #expect(Array(dryLines.dropFirst().dropLast()) == Array(deleteLines.dropFirst().dropLast()))
+    #expect(dryLines.last == "This is a dry run; no files will be deleted.")
 }
 
 @Test func homebrewDryRunParserIsStrictAndUsesDecimalUnits() {
@@ -267,7 +272,7 @@ private func pnpmFixture(result: ProcessResult, cache: Bool = true, helpResult: 
     let trash = CleanupCandidate(id: 3, name: "DerivedData: old", mechanism: .moveToTrash, currentScopeBytes: 10, estimatedReclaimBytes: nil, trashMoveBytes: 10, estimateBasis: "trash", scope: "/DerivedData", status: .ready, reason: nil, command: nil, argv: nil, filePath: "/DerivedData/old", fileIdentity: nil)
     let unknownTrash = CleanupCandidate(id: 4, name: "DerivedData: unreadable", mechanism: .moveToTrash, currentScopeBytes: nil, estimatedReclaimBytes: nil, trashMoveBytes: nil, estimateBasis: "unknown", scope: "/DerivedData", status: .ready, reason: nil, command: nil, argv: nil, filePath: "/DerivedData/unreadable", fileIdentity: nil)
     let report = DiscoveryReport(version: "x", dryRun: true, mutationPerformed: false, candidates: [known, unknown, trash, unknownTrash], notices: [])
-    #expect(report.estimatedPermanentReclaimBytes == 20); #expect(report.unestimatedPermanentCandidateCount == 1); #expect(report.bytesMovedToTrash == 10); #expect(report.unestimatedTrashCandidateCount == 1)
+    #expect(report.estimatedPermanentReclaimBytes == 20); #expect(report.unestimatedPermanentCandidateCount == 1); #expect(report.plannedTrashBytes == 10); #expect(report.unestimatedTrashSelectionCount == 1)
     #expect(renderReport(report).contains("not freed until Trash is emptied"))
 }
 
