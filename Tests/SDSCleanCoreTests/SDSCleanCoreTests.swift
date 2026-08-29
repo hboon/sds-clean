@@ -181,6 +181,14 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     #expect(Set(object.keys) == ["schemaVersion", "version", "dryRun", "mutationPerformed", "estimatedPermanentReclaimBytes", "unestimatedPermanentCandidateCount", "plannedTrashBytes", "unestimatedTrashSelectionCount", "candidates", "notices"])
 }
 
+@Test func stableJSONMatchesExactSnapshot() throws {
+    let report = DiscoveryReport(version: "0.1.0", dryRun: true, mutationPerformed: false, candidates: [], notices: [])
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    let snapshot = String(decoding: try encoder.encode(report), as: UTF8.self)
+    #expect(snapshot == #"{"candidates":[],"dryRun":true,"estimatedPermanentReclaimBytes":0,"mutationPerformed":false,"notices":[],"plannedTrashBytes":0,"schemaVersion":4,"unestimatedPermanentCandidateCount":0,"unestimatedTrashSelectionCount":0,"version":"0.1.0"}"#)
+}
+
 @Test func helpDriftInvalidatesBeforeCommandExecution() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let cache = root.appendingPathComponent("Library/Caches/org.swift.swiftpm"); try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
@@ -258,14 +266,15 @@ private func pnpmFixture(result: ProcessResult, cache: Bool = true, helpResult: 
     let dryLines = renderReport(report, dryRun: true).components(separatedBy: "\n")
     let deleteLines = renderReport(report, dryRun: false).components(separatedBy: "\n")
     #expect(Array(dryLines.dropLast(2)) == deleteLines)
-    #expect(dryLines.first == "Estimated cleanup: 42 bytes")
+    #expect(dryLines.first == "Estimated disk cleanup: 42 bytes")
     #expect(dryLines.last == "This is a dry run; no files will be deleted.")
 }
 
 @Test func humanOutputOnlyShowsCompactCleanupEstimates() {
     let candidate = CleanupCandidate(id: 1, name: "Homebrew", mechanism: .permanentCommand, currentScopeBytes: 298_500_000, estimatedReclaimBytes: 346_100_000, trashMoveBytes: nil, estimateBasis: "reported by brew cleanup --prune=120 --dry-run", scope: "/Users/test/Library/Caches/Homebrew", status: .ready, reason: nil, command: nil, argv: ["/opt/homebrew/bin/brew", "cleanup", "--prune=120"], filePath: nil, fileIdentity: nil)
     let output = renderReport(DiscoveryReport(version: "x", dryRun: true, mutationPerformed: false, candidates: [candidate], notices: []))
-    #expect(output.contains("- Homebrew | estimate: 346.1 MB"))
+    #expect(output.contains("- Homebrew: 346.1 MB"))
+    #expect(!output.contains("| estimate:"))
     for hidden in ["298.5 MB", "measured", "estimate basis", "/Users/test", "/opt/homebrew", "argv", "formula versions"] {
         #expect(!output.contains(hidden))
     }
@@ -286,9 +295,11 @@ private func pnpmFixture(result: ProcessResult, cache: Bool = true, helpResult: 
     let report = DiscoveryReport(version: "x", dryRun: true, mutationPerformed: false, candidates: [known, unknown, trash, unknownTrash], notices: [])
     #expect(report.estimatedPermanentReclaimBytes == 20); #expect(report.unestimatedPermanentCandidateCount == 1); #expect(report.plannedTrashBytes == 10); #expect(report.unestimatedTrashSelectionCount == 1)
     let output = renderReport(report)
-    #expect(output.contains("Estimated cleanup: 30 bytes plus items with unavailable estimates"))
-    #expect(output.contains("- npm | estimate: 20 bytes")); #expect(output.contains("- pnpm | estimate: unavailable"))
-    #expect(output.contains("- DerivedData: old | estimate: 10 bytes")); #expect(output.contains("- DerivedData: unreadable | estimate: unavailable"))
+    #expect(output.contains("Estimated disk cleanup: 30 bytes plus items with unavailable estimates"))
+    #expect(output.contains("Permanent: 20 bytes")); #expect(output.contains("Move to Trash: 10 bytes"))
+    #expect(output.contains("- npm: 20 bytes")); #expect(output.contains("- pnpm: estimate unavailable"))
+    #expect(output.contains("- DerivedData: old: 10 bytes")); #expect(output.contains("- DerivedData: unreadable: estimate unavailable"))
+    #expect(!output.contains("| estimate:"))
     #expect(output.contains("you can undo by restoring from Trash"))
 }
 
@@ -298,30 +309,31 @@ private func pnpmFixture(result: ProcessResult, cache: Bool = true, helpResult: 
         CleanupCandidate(id: 2, name: "npm", mechanism: .permanentCommand, currentScopeBytes: 2, estimatedReclaimBytes: 29_470_000_000, trashMoveBytes: nil, estimateBasis: "private basis", scope: "/private/npm", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil),
         CleanupCandidate(id: 3, name: "Yarn Classic", mechanism: .permanentCommand, currentScopeBytes: 3, estimatedReclaimBytes: 6_000, trashMoveBytes: nil, estimateBasis: "private basis", scope: "/private/yarn", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil),
         CleanupCandidate(id: 4, name: "SwiftPM", mechanism: .permanentCommand, currentScopeBytes: 4, estimatedReclaimBytes: 4_140_000_000, trashMoveBytes: nil, estimateBasis: "private basis", scope: "/private/swift", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil),
-        CleanupCandidate(id: 5, name: "Xcode DerivedData", mechanism: .moveToTrash, currentScopeBytes: 43_570_000_000, estimatedReclaimBytes: nil, trashMoveBytes: 43_570_000_000, estimateBasis: "99 private members", scope: "/private/DerivedData", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: 99, eligibleItemBytes: 43_570_000_000),
+        CleanupCandidate(id: 5, name: "Xcode DerivedData", mechanism: .moveToTrash, currentScopeBytes: 16_730_000_000, estimatedReclaimBytes: nil, trashMoveBytes: 16_730_000_000, estimateBasis: "99 private members", scope: "/private/DerivedData", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: 99, eligibleItemBytes: 16_730_000_000),
         CleanupCandidate(id: 6, name: "Downloads", mechanism: .moveToTrash, currentScopeBytes: 20_000_000, estimatedReclaimBytes: nil, trashMoveBytes: 20_000_000, estimateBasis: "2 private members", scope: "/private/Downloads", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: 2, eligibleItemBytes: 20_000_000),
         CleanupCandidate(id: 7, name: "Disabled tool", mechanism: .permanentCommand, currentScopeBytes: nil, estimatedReclaimBytes: nil, trashMoveBytes: nil, estimateBasis: "private diagnostic", scope: "/private/disabled", status: .skipped, reason: "not eligible", command: nil, argv: nil, filePath: nil, fileIdentity: nil),
     ]
     let report = DiscoveryReport(version: "secret-version", dryRun: true, mutationPerformed: false, candidates: candidates, notices: ["private notice"])
     let expected = """
-    Estimated cleanup: 77.55 GB
-      Permanent cleanup: 33.96 GB
-      Move to Trash: 43.59 GB (you can undo by restoring from Trash)
+    Estimated disk cleanup: 50.71 GB
+      Permanent: 33.96 GB
+      Move to Trash: 16.75 GB (you can undo by restoring from Trash)
 
-    Permanent:
-    - Homebrew | estimate: 346.1 MB
-    - npm | estimate: 29.47 GB
-    - Yarn Classic | estimate: 6 KB
-    - SwiftPM | estimate: 4.14 GB
+    Permanent: 33.96 GB
+    - Homebrew: 346.1 MB
+    - npm: 29.47 GB
+    - Yarn Classic: 6 KB
+    - SwiftPM: 4.14 GB
 
-    Move to Trash (you can undo by restoring from Trash):
-    - Xcode DerivedData | estimate: 43.57 GB
-    - Downloads | estimate: 20 MB
+    Move to Trash: 16.75 GB
+    - Xcode DerivedData: 16.73 GB
+    - Downloads: 20 MB
 
     This is a dry run; no files will be deleted.
     """
     #expect(renderReport(report) == expected)
     #expect(!renderReport(report).contains("Disabled tool"))
+    #expect(renderReport(report).components(separatedBy: "you can undo by restoring from Trash").count == 2)
     #expect(renderPlan(ExecutionPlan(candidates: candidates.filter { $0.status == .ready })) == expected.components(separatedBy: "\n\nThis is a dry run").first)
 }
 

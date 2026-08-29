@@ -29,23 +29,23 @@ private func compactPlanLines(candidates: [CleanupCandidate]) -> [String] {
     let hasUnavailableEstimate = permanent.contains { $0.estimatedReclaimBytes == nil } || trash.contains { $0.trashMoveBytes == nil }
     let totalQualifier = hasUnavailableEstimate ? " plus items with unavailable estimates" : ""
     var lines = [
-        "Estimated cleanup: \(byteString(permanentBytes &+ trashBytes))\(totalQualifier)",
-        "  Permanent cleanup: \(byteString(permanentBytes))",
+        "Estimated disk cleanup: \(byteString(permanentBytes &+ trashBytes))\(totalQualifier)",
+        "  Permanent: \(byteString(permanentBytes))",
         "  Move to Trash: \(byteString(trashBytes)) (you can undo by restoring from Trash)",
     ]
     if !permanent.isEmpty {
-        lines += ["", "Permanent:"]
-        lines += permanent.map { "- \(terminalSafe($0.name)) | estimate: \(estimateString($0.estimatedReclaimBytes))" }
+        lines += ["", "Permanent: \(byteString(permanentBytes))"]
+        lines += permanent.map { "- \(terminalSafe($0.name)): \(estimateString($0.estimatedReclaimBytes))" }
     }
     if !trash.isEmpty {
-        lines += ["", "Move to Trash (you can undo by restoring from Trash):"]
-        lines += trash.map { "- \(terminalSafe($0.name)) | estimate: \(estimateString($0.trashMoveBytes))" }
+        lines += ["", "Move to Trash: \(byteString(trashBytes))"]
+        lines += trash.map { "- \(terminalSafe($0.name)): \(estimateString($0.trashMoveBytes))" }
     }
     return lines
 }
 
 private func estimateString(_ bytes: UInt64?) -> String {
-    bytes.map { byteString($0) } ?? "unavailable"
+    bytes.map { byteString($0) } ?? "estimate unavailable"
 }
 
 public func terminalSafe(_ text: String) -> String {
