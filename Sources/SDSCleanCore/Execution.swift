@@ -21,6 +21,8 @@ public struct Executor {
             let help = runner.run(executable: expected.path, arguments: definition.helpArguments, environment: probeEnvironment(home: home.path, executable: expected.path, brew: definition.name == "Homebrew"), cwd: "/")
             guard help.status == 0, (help.stdout + help.stderr).localizedCaseInsensitiveContains(definition.helpToken) else { return "command help support changed" }
             guard let scopes = candidate.cacheScopes, !scopes.isEmpty else { return "cache scope is missing" }
+            let environment = probeEnvironment(home: home.path, executable: expected.path, brew: definition.name == "Homebrew")
+            guard let currentPaths = resolvedCachePaths(for: definition, executable: expected.path, runner: runner, environment: environment, home: home), Set(currentPaths.map(\.path)) == Set(scopes.map(\.path)) else { return "configured cache scope changed" }
             for scope in scopes {
                 let url = URL(fileURLWithPath: scope.path).standardizedFileURL
                 guard url.path.hasPrefix(home.path + "/"), let actual = try? identity(at: url), let homeIdentity = try? identity(at: home), actual == scope.identity, actual.ownerID == ownerID, actual.device == homeIdentity.device, !isSymlink(actual, at: url), directorySize(url, ownerID: ownerID) != nil else { return "cache scope identity, ownership, mount, or containment changed" }

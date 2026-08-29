@@ -3,20 +3,32 @@ import Foundation
 
 public struct ToolDefinition: Sendable {
     public let name: String; public let executableNames: [String]; public let versionArguments: [String]; public let helpArguments: [String]
-    public let helpToken: String; public let acceptedVersion: @Sendable (String) -> Bool; public let cleanupArguments: [String]; public let cachePaths: [String]; public let estimate: ToolEstimate
+    public let helpToken: String; public let acceptedVersion: @Sendable (String) -> Bool; public let cleanupArguments: [String]; public let cachePaths: [String]; public let cacheLocationArguments: [String]?; public let cacheLocationSuffix: String?; public let estimate: ToolEstimate
 }
 
 public enum ToolEstimate: Sendable { case fullScope(String), homebrewDryRun, unavailable(String) }
 
 public let allowedTools: [ToolDefinition] = [
-    .init(name: "Homebrew", executableNames: ["brew"], versionArguments: ["--version"], helpArguments: ["cleanup", "--help"], helpToken: "prune", acceptedVersion: { $0.contains("Homebrew") }, cleanupArguments: ["cleanup", "--prune=120"], cachePaths: ["Library/Caches/Homebrew"], estimate: .homebrewDryRun),
-    .init(name: "npm", executableNames: ["npm"], versionArguments: ["--version"], helpArguments: ["cache", "--help"], helpToken: "clean", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["cache", "clean", "--force"], cachePaths: [".npm"], estimate: .fullScope("command clears the discovered npm cache scope")),
-    .init(name: "pnpm", executableNames: ["pnpm"], versionArguments: ["--version"], helpArguments: ["store", "--help"], helpToken: "prune", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["store", "prune"], cachePaths: ["Library/pnpm/store", ".local/share/pnpm/store"], estimate: .unavailable("pnpm store prune removes only unreferenced packages; no reliable byte estimate is available")),
-    .init(name: "Yarn Classic", executableNames: ["yarn"], versionArguments: ["--version"], helpArguments: ["cache", "--help"], helpToken: "clean", acceptedVersion: { $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("1.") }, cleanupArguments: ["cache", "clean"], cachePaths: ["Library/Caches/Yarn"], estimate: .fullScope("command clears the discovered Yarn Classic cache scope")),
-    .init(name: "Bun", executableNames: ["bun"], versionArguments: ["--version"], helpArguments: ["pm", "--help"], helpToken: "cache", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["pm", "cache", "rm"], cachePaths: [".bun/install/cache"], estimate: .fullScope("command removes the discovered Bun package cache scope")),
-    .init(name: "SwiftPM", executableNames: ["swift"], versionArguments: ["--version"], helpArguments: ["package", "help", "purge-cache"], helpToken: "purge-cache", acceptedVersion: { $0.contains("Swift version") }, cleanupArguments: ["package", "purge-cache"], cachePaths: ["Library/Caches/org.swift.swiftpm"], estimate: .fullScope("command purges the discovered SwiftPM global cache scope")),
-    .init(name: "CocoaPods", executableNames: ["pod"], versionArguments: ["--version"], helpArguments: ["cache", "--help"], helpToken: "clean", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["cache", "clean", "--all"], cachePaths: ["Library/Caches/CocoaPods"], estimate: .fullScope("command clears all pods in the discovered CocoaPods cache scope")),
+    .init(name: "Homebrew", executableNames: ["brew"], versionArguments: ["--version"], helpArguments: ["cleanup", "--help"], helpToken: "prune", acceptedVersion: { $0.contains("Homebrew") }, cleanupArguments: ["cleanup", "--prune=120"], cachePaths: ["Library/Caches/Homebrew"], cacheLocationArguments: nil, cacheLocationSuffix: nil, estimate: .homebrewDryRun),
+    .init(name: "npm", executableNames: ["npm"], versionArguments: ["--version"], helpArguments: ["cache", "--help"], helpToken: "clean", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["cache", "clean", "--force"], cachePaths: [], cacheLocationArguments: ["config", "get", "cache"], cacheLocationSuffix: "_cacache", estimate: .fullScope("command removes the configured npm content-addressable cache")),
+    .init(name: "pnpm", executableNames: ["pnpm"], versionArguments: ["--version"], helpArguments: ["store", "--help"], helpToken: "prune", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["store", "prune"], cachePaths: ["Library/pnpm/store", ".local/share/pnpm/store"], cacheLocationArguments: nil, cacheLocationSuffix: nil, estimate: .unavailable("pnpm store prune removes only unreferenced packages; no reliable byte estimate is available")),
+    .init(name: "Yarn Classic", executableNames: ["yarn"], versionArguments: ["--version"], helpArguments: ["cache", "--help"], helpToken: "clean", acceptedVersion: { $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("1.") }, cleanupArguments: ["cache", "clean"], cachePaths: [], cacheLocationArguments: ["cache", "dir"], cacheLocationSuffix: nil, estimate: .fullScope("command clears the Yarn Classic global cache reported by yarn cache dir")),
+    .init(name: "Bun", executableNames: ["bun"], versionArguments: ["--version"], helpArguments: ["pm", "--help"], helpToken: "cache", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["pm", "cache", "rm"], cachePaths: [".bun/install/cache"], cacheLocationArguments: nil, cacheLocationSuffix: nil, estimate: .fullScope("command removes the discovered Bun package cache scope")),
+    .init(name: "SwiftPM", executableNames: ["swift"], versionArguments: ["--version"], helpArguments: ["package", "help", "purge-cache"], helpToken: "purge-cache", acceptedVersion: { $0.contains("Swift version") }, cleanupArguments: ["package", "purge-cache"], cachePaths: ["Library/Caches/org.swift.swiftpm"], cacheLocationArguments: nil, cacheLocationSuffix: nil, estimate: .fullScope("command purges the discovered SwiftPM global cache scope")),
+    .init(name: "CocoaPods", executableNames: ["pod"], versionArguments: ["--version"], helpArguments: ["cache", "--help"], helpToken: "clean", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["cache", "clean", "--all"], cachePaths: ["Library/Caches/CocoaPods"], cacheLocationArguments: nil, cacheLocationSuffix: nil, estimate: .fullScope("command clears all pods in the discovered CocoaPods cache scope")),
 ]
+
+public func resolvedCachePaths(for definition: ToolDefinition, executable: String, runner: any ProcessRunning, environment: [String: String], home: URL) -> [URL]? {
+    if let arguments = definition.cacheLocationArguments {
+        let result = runner.run(executable: executable, arguments: arguments, environment: environment, cwd: "/")
+        let lines = result.stdout.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard result.status == 0, lines.count == 1, lines[0].hasPrefix("/") else { return nil }
+        var url = URL(fileURLWithPath: lines[0]).standardizedFileURL
+        if let suffix = definition.cacheLocationSuffix { url.appendPathComponent(suffix) }
+        return url.path.hasPrefix(home.path + "/") ? [url] : nil
+    }
+    return definition.cachePaths.map { home.appendingPathComponent($0).standardizedFileURL }
+}
 
 public func installationLayoutAllowed(name: String, launcher: String, resolved: String, home: URL) -> Bool {
     let prefixLauncher = launcher.hasPrefix("/opt/homebrew/bin/") || launcher.hasPrefix("/usr/local/bin/")
@@ -86,8 +98,8 @@ public struct Discoverer {
         guard helpResult.status == 0, (helpResult.stdout + helpResult.stderr).localizedCaseInsensitiveContains(definition.helpToken) else { return (nil, "\(definition.name): cleanup disabled — required cleanup command is unavailable in current help; no cleanup command will run") }
         guard let homeIdentity = try? identity(at: home) else { return (nil, "\(definition.name): cleanup disabled — effective home is unavailable; no cleanup command will run") }
         var size: UInt64 = 0; var scopes: [String] = []; var scopeIdentities: [CacheScopeIdentity] = []
-        for relative in definition.cachePaths {
-            let cache = home.appendingPathComponent(relative).standardizedFileURL
+        guard let cachePaths = resolvedCachePaths(for: definition, executable: launcher, runner: runner, environment: environment, home: home) else { return (nil, "\(definition.name): cleanup disabled — configured cache location was unavailable or outside the effective home; no cleanup command will run") }
+        for cache in cachePaths {
             guard cache.path.hasPrefix(home.path + "/"), let cacheIdentity = try? identity(at: cache), cacheIdentity.ownerID == ownerID, cacheIdentity.device == homeIdentity.device, !isSymlink(cacheIdentity, at: cache), let cacheSize = directorySize(cache, ownerID: ownerID) else { continue }
             size &+= cacheSize; scopes.append(cache.path); scopeIdentities.append(CacheScopeIdentity(path: cache.path, identity: cacheIdentity))
         }
@@ -140,11 +152,12 @@ public struct Discoverer {
             guard values?.isRegularFile == true, values?.isPackage != true, values?.isAliasFile != true else { continue }
             let name = child.lastPathComponent; let lower = name.lowercased()
             guard !name.hasPrefix("."), !lower.hasSuffix(".download"), !lower.hasSuffix(".crdownload"), !lower.hasSuffix(".part"), item.modified <= cutoff, suffixes.contains(where: { lower.hasSuffix($0) }) else { continue }
-            eligible.append(TrashMember(path: child.path, identity: item, bytes: item.size))
+            eligible.append(TrashMember(path: child.path, identity: item, bytes: allocatedFileSize(child)))
         }
         guard !eligible.isEmpty else { notices.append("Downloads: no eligible old top-level installer or archive files found"); return }
         let eligibleBytes = eligible.compactMap(\.bytes).reduce(0, &+)
-        candidates.append(CleanupCandidate(id: startingID, name: "Downloads", mechanism: .moveToTrash, currentScopeBytes: eligibleBytes, estimatedReclaimBytes: nil, trashMoveBytes: eligibleBytes, estimateBasis: "\(eligible.count) eligible old top-level installer/archive file(s); each file moves separately to Trash", scope: parent.path, status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: eligible.count, eligibleItemBytes: eligibleBytes, executionMembers: eligible)); startingID += 1
+        let totalBytes = directorySize(parent, ownerID: ownerID)
+        candidates.append(CleanupCandidate(id: startingID, name: "Downloads", mechanism: .moveToTrash, currentScopeBytes: eligibleBytes, totalScopeBytes: totalBytes, estimatedReclaimBytes: nil, trashMoveBytes: eligibleBytes, estimateBasis: "\(eligible.count) eligible old top-level installer/archive file(s); each file moves separately to Trash; totalScopeBytes is allocated usage for the whole Downloads folder", scope: parent.path, status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: eligible.count, eligibleItemBytes: eligibleBytes, executionMembers: eligible)); startingID += 1
     }
 }
 

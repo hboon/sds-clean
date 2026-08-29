@@ -9,7 +9,8 @@ sds-clean chooses a mode explicitly.
   sds-clean --delete   Review the complete plan, then confirm or cancel.
 """
 
-public func byteString(_ bytes: UInt64?) -> String { guard let bytes else { return "unknown" }; return ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file) }
+public func byteString(_ bytes: UInt64?) -> String { guard let bytes else { return "unknown" }; if bytes == 0 { return "0 bytes" }; return ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file) }
+public func allocatedByteString(_ bytes: UInt64?) -> String { guard let bytes else { return "unknown" }; return ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .binary) }
 
 public func renderReport(_ report: DiscoveryReport, dryRun: Bool = true) -> String {
     var lines = compactPlanLines(candidates: report.candidates.filter { $0.status == .ready })
@@ -39,7 +40,11 @@ private func compactPlanLines(candidates: [CleanupCandidate]) -> [String] {
     }
     if !trash.isEmpty {
         lines += ["", "Move to Trash: \(byteString(trashBytes))"]
-        lines += trash.map { "- \(terminalSafe($0.name)): \(estimateString($0.trashMoveBytes))" }
+        lines += trash.map { candidate in
+            let estimate = estimateString(candidate.trashMoveBytes)
+            guard candidate.name == "Downloads", let total = candidate.totalScopeBytes else { return "- \(terminalSafe(candidate.name)): \(estimate)" }
+            return "- Downloads: \(estimate) eligible (\(allocatedByteString(total)) total)"
+        }
     }
     return lines
 }

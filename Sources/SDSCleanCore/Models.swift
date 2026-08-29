@@ -47,6 +47,7 @@ public struct CleanupCandidate: Codable, Equatable, Sendable, Identifiable {
     public let name: String
     public let mechanism: Mechanism
     public let currentScopeBytes: UInt64?
+    public let totalScopeBytes: UInt64?
     public let estimatedReclaimBytes: UInt64?
     public let trashMoveBytes: UInt64?
     public let estimateBasis: String
@@ -61,12 +62,12 @@ public struct CleanupCandidate: Codable, Equatable, Sendable, Identifiable {
     public let eligibleItemCount: Int?
     public let eligibleItemBytes: UInt64?
     public private(set) var executionMembers: [TrashMember] = []
-    public init(id: Int, name: String, mechanism: Mechanism, currentScopeBytes: UInt64?, estimatedReclaimBytes: UInt64?, trashMoveBytes: UInt64?, estimateBasis: String, scope: String, status: CandidateStatus, reason: String?, command: CommandIdentity?, argv: [String]?, cacheScopes: [CacheScopeIdentity]? = nil, filePath: String?, fileIdentity: FileIdentity?, eligibleItemCount: Int? = nil, eligibleItemBytes: UInt64? = nil, executionMembers: [TrashMember] = []) {
-        self.id = id; self.name = name; self.mechanism = mechanism; self.currentScopeBytes = currentScopeBytes; self.estimatedReclaimBytes = estimatedReclaimBytes; self.trashMoveBytes = trashMoveBytes; self.estimateBasis = estimateBasis; self.scope = scope; self.status = status; self.reason = reason; self.command = command; self.argv = argv; self.cacheScopes = cacheScopes; self.filePath = filePath; self.fileIdentity = fileIdentity; self.eligibleItemCount = eligibleItemCount; self.eligibleItemBytes = eligibleItemBytes; self.executionMembers = executionMembers
+    public init(id: Int, name: String, mechanism: Mechanism, currentScopeBytes: UInt64?, totalScopeBytes: UInt64? = nil, estimatedReclaimBytes: UInt64?, trashMoveBytes: UInt64?, estimateBasis: String, scope: String, status: CandidateStatus, reason: String?, command: CommandIdentity?, argv: [String]?, cacheScopes: [CacheScopeIdentity]? = nil, filePath: String?, fileIdentity: FileIdentity?, eligibleItemCount: Int? = nil, eligibleItemBytes: UInt64? = nil, executionMembers: [TrashMember] = []) {
+        self.id = id; self.name = name; self.mechanism = mechanism; self.currentScopeBytes = currentScopeBytes; self.totalScopeBytes = totalScopeBytes; self.estimatedReclaimBytes = estimatedReclaimBytes; self.trashMoveBytes = trashMoveBytes; self.estimateBasis = estimateBasis; self.scope = scope; self.status = status; self.reason = reason; self.command = command; self.argv = argv; self.cacheScopes = cacheScopes; self.filePath = filePath; self.fileIdentity = fileIdentity; self.eligibleItemCount = eligibleItemCount; self.eligibleItemBytes = eligibleItemBytes; self.executionMembers = executionMembers
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, mechanism, currentScopeBytes, estimatedReclaimBytes, trashMoveBytes, estimateBasis, scope, status, reason, command, argv, cacheScopes, filePath, fileIdentity, eligibleItemCount, eligibleItemBytes
+        case id, name, mechanism, currentScopeBytes, totalScopeBytes, estimatedReclaimBytes, trashMoveBytes, estimateBasis, scope, status, reason, command, argv, cacheScopes, filePath, fileIdentity, eligibleItemCount, eligibleItemBytes
     }
 }
 
@@ -81,7 +82,7 @@ public struct DiscoveryReport: Codable, Sendable {
     public let unestimatedTrashSelectionCount: Int
     public let candidates: [CleanupCandidate]
     public let notices: [String]
-    public init(schemaVersion: Int = 4, version: String, dryRun: Bool, mutationPerformed: Bool, candidates: [CleanupCandidate], notices: [String]) {
+    public init(schemaVersion: Int = 5, version: String, dryRun: Bool, mutationPerformed: Bool, candidates: [CleanupCandidate], notices: [String]) {
         self.schemaVersion = schemaVersion; self.version = version; self.dryRun = dryRun; self.mutationPerformed = mutationPerformed
         let ready = candidates.filter { $0.status == .ready }
         self.estimatedPermanentReclaimBytes = ready.compactMap { $0.mechanism == .permanentCommand ? $0.estimatedReclaimBytes : nil }.reduce(0, &+)

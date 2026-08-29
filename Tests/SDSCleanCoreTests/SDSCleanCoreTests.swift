@@ -57,11 +57,47 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     #expect(allowedTools.first { $0.name == "SwiftPM" }!.helpArguments == ["package", "help", "purge-cache"])
 }
 
+@Test func commandReportedCacheScopesAreExactAndContained() throws {
+    let home = URL(fileURLWithPath: "/Users/tester")
+    let npm = try #require(allowedTools.first { $0.name == "npm" })
+    let yarn = try #require(allowedTools.first { $0.name == "Yarn Classic" })
+    let runner = FakeRunner { _, arguments, _, cwd in
+        #expect(cwd == "/")
+        if arguments == ["config", "get", "cache"] { return ProcessResult(status: 0, stdout: "/Users/tester/.npm\n", stderr: "") }
+        if arguments == ["cache", "dir"] { return ProcessResult(status: 0, stdout: "/Users/tester/Library/Caches/Yarn/v6\n", stderr: "") }
+        return ProcessResult(status: 1, stdout: "", stderr: "unexpected")
+    }
+    #expect(resolvedCachePaths(for: npm, executable: "/usr/local/bin/npm", runner: runner, environment: [:], home: home)?.map(\.path) == ["/Users/tester/.npm/_cacache"])
+    #expect(resolvedCachePaths(for: yarn, executable: "/opt/homebrew/bin/yarn", runner: runner, environment: [:], home: home)?.map(\.path) == ["/Users/tester/Library/Caches/Yarn/v6"])
+    let escaping = FakeRunner { _, _, _, _ in ProcessResult(status: 0, stdout: "/tmp/cache\n", stderr: "") }
+    #expect(resolvedCachePaths(for: npm, executable: "/usr/local/bin/npm", runner: escaping, environment: [:], home: home) == nil)
+}
+
+@Test func allocatedDirectorySizeDoesNotFollowSymlinkMembers() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let file = root.appendingPathComponent("data"); try Data(repeating: 1, count: 10).write(to: file)
+    #expect(directorySize(root, ownerID: geteuid()) == allocatedFileSize(file))
+    try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("link"), withDestinationURL: file)
+    #expect(directorySize(root, ownerID: geteuid()) == allocatedFileSize(file))
+    try FileManager.default.removeItem(at: root)
+}
+
+@Test func downloadsOutputDistinguishesEligibleFromWholeFolderUsageWithoutPaths() throws {
+    let candidate = CleanupCandidate(id: 1, name: "Downloads", mechanism: .moveToTrash, currentScopeBytes: 20_914_176, totalScopeBytes: 216_190_976, estimatedReclaimBytes: nil, trashMoveBytes: 20_914_176, estimateBasis: "393 eligible items", scope: "/Users/private/Downloads", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: 393, eligibleItemBytes: 20_914_176)
+    let report = DiscoveryReport(version: "x", dryRun: true, mutationPerformed: false, candidates: [candidate], notices: [])
+    let output = renderReport(report)
+    #expect(output.contains("- Downloads: 20.9 MB eligible (206.2 MB total)"))
+    #expect(!output.contains("/Users/private")); #expect(!output.contains("393"))
+    let json = String(decoding: try JSONEncoder().encode(report), as: UTF8.self)
+    #expect(json.contains("\"totalScopeBytes\":216190976")); #expect(!json.contains("secret-member.zip"))
+}
+
 @Test func dryRunReportAndJSONDeclareZeroMutation() throws {
     let report = DiscoveryReport(version: "0.1.0", dryRun: true, mutationPerformed: false, candidates: [], notices: [])
     #expect(renderReport(report).hasSuffix("This is a dry run; no files will be deleted."))
     let data = try JSONEncoder().encode(report); let decoded = try JSONDecoder().decode(DiscoveryReport.self, from: data)
-    #expect(decoded.schemaVersion == 4); #expect(decoded.mutationPerformed == false); #expect(decoded.dryRun)
+    #expect(decoded.schemaVersion == 5); #expect(decoded.mutationPerformed == false); #expect(decoded.dryRun)
 }
 
 @Test func promoIsRestrained() {
@@ -124,9 +160,10 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     let downloadsCandidates = report.candidates.filter { $0.name == "Downloads" }
     #expect(downloadsCandidates.count == 1)
     #expect(downloadsCandidates.first?.status == .ready); #expect(downloadsCandidates.first?.mechanism == .moveToTrash)
-    #expect(downloadsCandidates.first?.currentScopeBytes == 50)
+    #expect(downloadsCandidates.first?.currentScopeBytes == allocatedFileSize(downloads.appendingPathComponent("eligible.ZIP")))
     #expect(downloadsCandidates.first?.eligibleItemCount == 1)
-    #expect(downloadsCandidates.first?.eligibleItemBytes == 50)
+    #expect(downloadsCandidates.first?.eligibleItemBytes == allocatedFileSize(downloads.appendingPathComponent("eligible.ZIP")))
+    #expect(downloadsCandidates.first?.totalScopeBytes == directorySize(downloads, ownerID: geteuid()))
     #expect(!renderReport(report).contains("eligible.ZIP"))
     #expect(!String(decoding: try JSONEncoder().encode(report), as: UTF8.self).contains("eligible.ZIP"))
     let aggregate = try #require(downloadsCandidates.first); let trasher = RecordingTrasher()
@@ -186,7 +223,7 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     let snapshot = String(decoding: try encoder.encode(report), as: UTF8.self)
-    #expect(snapshot == #"{"candidates":[],"dryRun":true,"estimatedPermanentReclaimBytes":0,"mutationPerformed":false,"notices":[],"plannedTrashBytes":0,"schemaVersion":4,"unestimatedPermanentCandidateCount":0,"unestimatedTrashSelectionCount":0,"version":"0.1.0"}"#)
+    #expect(snapshot == #"{"candidates":[],"dryRun":true,"estimatedPermanentReclaimBytes":0,"mutationPerformed":false,"notices":[],"plannedTrashBytes":0,"schemaVersion":5,"unestimatedPermanentCandidateCount":0,"unestimatedTrashSelectionCount":0,"version":"0.1.0"}"#)
 }
 
 @Test func helpDriftInvalidatesBeforeCommandExecution() throws {
@@ -199,6 +236,28 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     let runner = FakeRunner { _, received, _, _ in arguments.values.append(received); return received == ["--version"] ? ProcessResult(status: 0, stdout: "Apple Swift version 6.2\n", stderr: "") : ProcessResult(status: 0, stdout: "no matching subcommand", stderr: "") }
     let outcomes = Executor(home: root, ownerID: geteuid(), runner: runner).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState())
     #expect(outcomes.first?.kind == .invalidated); #expect(!arguments.values.contains(["package", "purge-cache"]))
+    try FileManager.default.removeItem(at: root)
+}
+
+@Test func configuredCacheScopeDriftInvalidatesBeforeCleanup() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let original = root.appendingPathComponent(".npm/_cacache"); let changed = root.appendingPathComponent("other/_cacache")
+    try FileManager.default.createDirectory(at: original, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: changed, withIntermediateDirectories: true)
+    let executable = "/usr/bin/true"; let executableIdentity = try identity(at: URL(fileURLWithPath: executable), followSymlink: true)
+    let scopeIdentity = try identity(at: original)
+    let candidate = CleanupCandidate(id: 1, name: "npm", mechanism: .permanentCommand, currentScopeBytes: 0, estimatedReclaimBytes: 0, trashMoveBytes: nil, estimateBasis: "test", scope: original.path, status: .ready, reason: nil, command: CommandIdentity(path: executable, device: executableIdentity.device, inode: executableIdentity.inode, size: executableIdentity.size, modified: executableIdentity.modified, ownerID: executableIdentity.ownerID, version: "8.18.0"), argv: [executable, "cache", "clean", "--force"], cacheScopes: [CacheScopeIdentity(path: original.path, identity: scopeIdentity)], filePath: nil, fileIdentity: nil)
+    final class Calls: @unchecked Sendable { var cleanupRan = false }
+    let calls = Calls()
+    let runner = FakeRunner { _, arguments, _, cwd in
+        #expect(cwd == "/")
+        if arguments == ["--version"] { return ProcessResult(status: 0, stdout: "8.18.0\n", stderr: "") }
+        if arguments == ["cache", "--help"] { return ProcessResult(status: 0, stdout: "cache clean", stderr: "") }
+        if arguments == ["config", "get", "cache"] { return ProcessResult(status: 0, stdout: changed.deletingLastPathComponent().path + "\n", stderr: "") }
+        calls.cleanupRan = true; return ProcessResult(status: 0, stdout: "", stderr: "")
+    }
+    let outcome = try #require(Executor(home: root, ownerID: geteuid(), runner: runner).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState()).first)
+    #expect(outcome.kind == .invalidated); #expect(outcome.detail == "configured cache scope changed"); #expect(!calls.cleanupRan)
     try FileManager.default.removeItem(at: root)
 }
 
@@ -370,7 +429,7 @@ private func pnpmFixture(result: ProcessResult, cache: Bool = true, helpResult: 
     let overrides = Dictionary(uniqueKeysWithValues: allowedTools.map { ($0.executableNames[0], [String]()) })
     let report = Discoverer(home: root, executableOverrides: overrides).discover(version: "x")
     let aggregate = try #require(report.candidates.first { $0.name == "Xcode DerivedData" })
-    #expect(aggregate.eligibleItemCount == 2); #expect(aggregate.trashMoveBytes == 30); #expect(aggregate.filePath == nil)
+    #expect(aggregate.eligibleItemCount == 2); #expect(aggregate.trashMoveBytes == directorySize(parent, ownerID: geteuid())); #expect(aggregate.filePath == nil)
     #expect(!renderReport(report).contains("alpha-secret")); #expect(!renderPlan(ExecutionPlan(candidates: [aggregate])).contains("beta-secret"))
     let json = try JSONEncoder().encode(report); let jsonText = String(decoding: json, as: UTF8.self)
     #expect(!jsonText.contains("executionMembers")); #expect(!jsonText.contains("alpha-secret")); #expect(jsonText.contains("eligibleItemCount")); #expect(jsonText.contains("eligibleItemBytes"))

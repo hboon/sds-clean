@@ -82,14 +82,21 @@ public func isSymlink(_ identity: FileIdentity, at url: URL) -> Bool {
 public func directorySize(_ root: URL, ownerID: UInt32) -> UInt64? {
     guard let rootIdentity = try? identity(at: root), rootIdentity.ownerID == ownerID, !isSymlink(rootIdentity, at: root) else { return nil }
     let rootDevice = rootIdentity.device
-    guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isSymbolicLinkKey, .isRegularFileKey], options: [], errorHandler: { _, _ in true }) else { return nil }
+    var encounteredError = false
+    guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isSymbolicLinkKey, .isRegularFileKey], options: [], errorHandler: { _, _ in encounteredError = true; return false }) else { return nil }
     var total: UInt64 = 0; var count = 0
     while let url = enumerator.nextObject() as? URL {
         count += 1; if count > 250_000 { return nil }
-        guard let item = try? identity(at: url), item.ownerID == ownerID, item.device == rootDevice else { enumerator.skipDescendants(); continue }
+        guard let item = try? identity(at: url), item.ownerID == ownerID, item.device == rootDevice else { return nil }
         if isSymlink(item, at: url) { continue }
-        var info = stat(); guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { continue }
-        if (info.st_mode & S_IFMT) == S_IFREG { total &+= item.size }
+        var info = stat(); guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0 else { return nil }
+        if (info.st_mode & S_IFMT) == S_IFREG { total &+= UInt64(max(0, info.st_blocks)) * 512 }
     }
-    return total
+    return encounteredError ? nil : total
+}
+
+public func allocatedFileSize(_ url: URL) -> UInt64? {
+    var info = stat()
+    guard url.path.withCString({ Darwin.lstat($0, &info) }) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return nil }
+    return UInt64(max(0, info.st_blocks)) * 512
 }
