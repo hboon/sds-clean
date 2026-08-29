@@ -33,6 +33,15 @@ public struct CacheScopeIdentity: Codable, Equatable, Sendable {
     public init(path: String, identity: FileIdentity) { self.path = path; self.identity = identity }
 }
 
+public struct TrashMember: Equatable, Sendable {
+    public let path: String
+    public let identity: FileIdentity
+    public let bytes: UInt64?
+    public init(path: String, identity: FileIdentity, bytes: UInt64?) {
+        self.path = path; self.identity = identity; self.bytes = bytes
+    }
+}
+
 public struct CleanupCandidate: Codable, Equatable, Sendable, Identifiable {
     public let id: Int
     public let name: String
@@ -51,8 +60,13 @@ public struct CleanupCandidate: Codable, Equatable, Sendable, Identifiable {
     public let fileIdentity: FileIdentity?
     public let eligibleItemCount: Int?
     public let eligibleItemBytes: UInt64?
-    public init(id: Int, name: String, mechanism: Mechanism, currentScopeBytes: UInt64?, estimatedReclaimBytes: UInt64?, trashMoveBytes: UInt64?, estimateBasis: String, scope: String, status: CandidateStatus, reason: String?, command: CommandIdentity?, argv: [String]?, cacheScopes: [CacheScopeIdentity]? = nil, filePath: String?, fileIdentity: FileIdentity?, eligibleItemCount: Int? = nil, eligibleItemBytes: UInt64? = nil) {
-        self.id = id; self.name = name; self.mechanism = mechanism; self.currentScopeBytes = currentScopeBytes; self.estimatedReclaimBytes = estimatedReclaimBytes; self.trashMoveBytes = trashMoveBytes; self.estimateBasis = estimateBasis; self.scope = scope; self.status = status; self.reason = reason; self.command = command; self.argv = argv; self.cacheScopes = cacheScopes; self.filePath = filePath; self.fileIdentity = fileIdentity; self.eligibleItemCount = eligibleItemCount; self.eligibleItemBytes = eligibleItemBytes
+    public private(set) var executionMembers: [TrashMember] = []
+    public init(id: Int, name: String, mechanism: Mechanism, currentScopeBytes: UInt64?, estimatedReclaimBytes: UInt64?, trashMoveBytes: UInt64?, estimateBasis: String, scope: String, status: CandidateStatus, reason: String?, command: CommandIdentity?, argv: [String]?, cacheScopes: [CacheScopeIdentity]? = nil, filePath: String?, fileIdentity: FileIdentity?, eligibleItemCount: Int? = nil, eligibleItemBytes: UInt64? = nil, executionMembers: [TrashMember] = []) {
+        self.id = id; self.name = name; self.mechanism = mechanism; self.currentScopeBytes = currentScopeBytes; self.estimatedReclaimBytes = estimatedReclaimBytes; self.trashMoveBytes = trashMoveBytes; self.estimateBasis = estimateBasis; self.scope = scope; self.status = status; self.reason = reason; self.command = command; self.argv = argv; self.cacheScopes = cacheScopes; self.filePath = filePath; self.fileIdentity = fileIdentity; self.eligibleItemCount = eligibleItemCount; self.eligibleItemBytes = eligibleItemBytes; self.executionMembers = executionMembers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, mechanism, currentScopeBytes, estimatedReclaimBytes, trashMoveBytes, estimateBasis, scope, status, reason, command, argv, cacheScopes, filePath, fileIdentity, eligibleItemCount, eligibleItemBytes
     }
 }
 
@@ -67,7 +81,7 @@ public struct DiscoveryReport: Codable, Sendable {
     public let unestimatedTrashCandidateCount: Int
     public let candidates: [CleanupCandidate]
     public let notices: [String]
-    public init(schemaVersion: Int = 2, version: String, dryRun: Bool, mutationPerformed: Bool, candidates: [CleanupCandidate], notices: [String]) {
+    public init(schemaVersion: Int = 3, version: String, dryRun: Bool, mutationPerformed: Bool, candidates: [CleanupCandidate], notices: [String]) {
         self.schemaVersion = schemaVersion; self.version = version; self.dryRun = dryRun; self.mutationPerformed = mutationPerformed
         let ready = candidates.filter { $0.status == .ready }
         self.estimatedPermanentReclaimBytes = ready.compactMap { $0.mechanism == .permanentCommand ? $0.estimatedReclaimBytes : nil }.reduce(0, &+)
@@ -92,8 +106,11 @@ public struct ItemOutcome: Codable, Sendable {
     public let beforeEstimateBytes: UInt64?
     public let afterEstimateBytes: UInt64?
     public let detail: String
-    public init(candidateID: Int, kind: OutcomeKind, exitCode: Int32?, beforeEstimateBytes: UInt64? = nil, afterEstimateBytes: UInt64? = nil, detail: String) {
-        self.candidateID = candidateID; self.kind = kind; self.exitCode = exitCode; self.beforeEstimateBytes = beforeEstimateBytes; self.afterEstimateBytes = afterEstimateBytes; self.detail = detail
+    public let succeededItemCount: Int?
+    public let failedItemCount: Int?
+    public let notRunItemCount: Int?
+    public init(candidateID: Int, kind: OutcomeKind, exitCode: Int32?, beforeEstimateBytes: UInt64? = nil, afterEstimateBytes: UInt64? = nil, detail: String, succeededItemCount: Int? = nil, failedItemCount: Int? = nil, notRunItemCount: Int? = nil) {
+        self.candidateID = candidateID; self.kind = kind; self.exitCode = exitCode; self.beforeEstimateBytes = beforeEstimateBytes; self.afterEstimateBytes = afterEstimateBytes; self.detail = detail; self.succeededItemCount = succeededItemCount; self.failedItemCount = failedItemCount; self.notRunItemCount = notRunItemCount
     }
 }
 

@@ -27,7 +27,18 @@ public struct Executor {
             }
             return nil
         }
+        if !candidate.executionMembers.isEmpty {
+            guard candidate.eligibleItemCount == candidate.executionMembers.count else { return "aggregate member count changed" }
+            for member in candidate.executionMembers {
+                if let reason = validateTrashMember(path: member.path, expected: member.identity) { return reason }
+            }
+            return nil
+        }
         guard let path = candidate.filePath, let expected = candidate.fileIdentity else { return "missing file identity" }
+        return validateTrashMember(path: path, expected: expected)
+    }
+
+    private func validateTrashMember(path: String, expected: FileIdentity) -> String? {
         let url = URL(fileURLWithPath: path).standardizedFileURL
         let allowedParents = [home.appendingPathComponent("Downloads").standardizedFileURL, home.appendingPathComponent("Library/Developer/Xcode/DerivedData").standardizedFileURL]
         guard let parentIndex = allowedParents.firstIndex(of: url.deletingLastPathComponent().standardizedFileURL), url.path.hasPrefix(home.path + "/"), let actual = try? identity(at: url), actual == expected, actual.ownerID == ownerID, !isSymlink(actual, at: url), let parentIdentity = try? identity(at: url.deletingLastPathComponent()), let homeIdentity = try? identity(at: home), parentIdentity.ownerID == ownerID, !isSymlink(parentIdentity, at: url.deletingLastPathComponent()), actual.device == parentIdentity.device, parentIdentity.device == homeIdentity.device else { return "file identity, type, ownership, mount, or containment changed" }
@@ -58,12 +69,37 @@ public struct Executor {
                 let brew = candidate.name == "Homebrew"; let result = runner.run(executable: executable, arguments: Array(argv.dropFirst()), environment: sanitizedEnvironment(home: home.path, executable: executable, brew: brew), cwd: "/")
                 let after = candidate.cacheScopes?.compactMap { directorySize(URL(fileURLWithPath: $0.path), ownerID: ownerID) }.reduce(0, &+)
                 outcomes.append(ItemOutcome(candidateID: candidate.id, kind: result.status == 0 ? .commandSucceeded : .commandFailed, exitCode: result.status, beforeEstimateBytes: candidate.currentScopeBytes, afterEstimateBytes: after, detail: result.status == 0 ? "Permanent cleanup command completed" : "Permanent cleanup command failed; no deletion fallback used: \(result.stderr.prefix(240))"))
+            } else if !candidate.executionMembers.isEmpty {
+                outcomes.append(executeAggregate(candidate, cancellation: cancellation))
             } else if let path = candidate.filePath {
                 do { try trasher.trash(URL(fileURLWithPath: path)); outcomes.append(ItemOutcome(candidateID: candidate.id, kind: .trashed, exitCode: nil, beforeEstimateBytes: candidate.trashMoveBytes, afterEstimateBytes: nil, detail: "Moved to Trash; after estimate is not asserted and this does not equal freed disk space")) }
                 catch { outcomes.append(ItemOutcome(candidateID: candidate.id, kind: .commandFailed, exitCode: nil, beforeEstimateBytes: candidate.trashMoveBytes, afterEstimateBytes: candidate.trashMoveBytes, detail: "Move to Trash failed: \(error)")) }
             }
         }
         return outcomes
+    }
+
+    private func executeAggregate(_ candidate: CleanupCandidate, cancellation: CancellationState) -> ItemOutcome {
+        var succeeded = 0; var failed = 0; var notRun = 0; var invalidated = false; var remainingBytes: UInt64 = 0; var remainingSizeKnown = true
+        for (offset, member) in candidate.executionMembers.enumerated() {
+            if cancellation.isCancelled {
+                let remaining = candidate.executionMembers[offset...]; notRun = remaining.count
+                remainingSizeKnown = remaining.allSatisfy { $0.bytes != nil }; remainingBytes = remaining.compactMap(\.bytes).reduce(0, &+); break
+            }
+            if validateTrashMember(path: member.path, expected: member.identity) != nil {
+                failed += 1; invalidated = true; remainingSizeKnown = remainingSizeKnown && member.bytes != nil; remainingBytes &+= member.bytes ?? 0; continue
+            }
+            do { try trasher.trash(URL(fileURLWithPath: member.path)); succeeded += 1 }
+            catch { failed += 1; remainingSizeKnown = remainingSizeKnown && member.bytes != nil; remainingBytes &+= member.bytes ?? 0 }
+        }
+        let kind: OutcomeKind
+        if succeeded == 0 && failed == 0 { kind = .notRun }
+        else if invalidated { kind = .invalidated }
+        else if failed > 0 { kind = .commandFailed }
+        else { kind = .trashed }
+        let detail = "DerivedData aggregate: \(succeeded) item(s) moved separately to Trash, \(failed) failed, \(notRun) not run; the DerivedData folder was not moved"
+        let afterBytes: UInt64? = failed + notRun > 0 && remainingSizeKnown ? remainingBytes : nil
+        return ItemOutcome(candidateID: candidate.id, kind: kind, exitCode: nil, beforeEstimateBytes: candidate.trashMoveBytes, afterEstimateBytes: afterBytes, detail: detail, succeededItemCount: succeeded, failedItemCount: failed, notRunItemCount: notRun)
     }
 }
 

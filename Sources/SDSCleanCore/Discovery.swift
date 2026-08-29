@@ -110,16 +110,21 @@ public struct Discoverer {
         guard let children = try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: [.isDirectoryKey, .isPackageKey], options: [.skipsHiddenFiles]) else { notices.append("DerivedData: unavailable or empty"); return }
         let parentIdentity = try? identity(at: parent); let homeIdentity = try? identity(at: home)
         let cutoff = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: now))!
-        let sorted = children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }); var accepted = 0; var recent = 0; var unsafe = 0
+        let sorted = children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }); var members: [TrashMember] = []; var recent = 0; var unsafe = 0
         for child in sorted {
             guard child.deletingLastPathComponent().standardizedFileURL == parent, let item = try? identity(at: child), item.ownerID == ownerID, item.device == parentIdentity?.device, parentIdentity?.device == homeIdentity?.device, !isSymlink(item, at: child), (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { unsafe += 1; continue }
             guard item.modified < cutoff else { recent += 1; continue }
-            guard accepted < 100 else { continue }
+            guard members.count < 100 else { continue }
             let size = directorySize(child, ownerID: ownerID)
-            candidates.append(CleanupCandidate(id: startingID, name: "DerivedData: \(child.lastPathComponent)", mechanism: .moveToTrash, currentScopeBytes: size, estimatedReclaimBytes: nil, trashMoveBytes: size, estimateBasis: "current item size; moving to Trash does not free disk space until Trash is emptied", scope: parent.path, status: .ready, reason: nil, command: nil, argv: nil, filePath: child.path, fileIdentity: item)); startingID += 1; accepted += 1
+            members.append(TrashMember(path: child.path, identity: item, bytes: size))
+        }
+        if !members.isEmpty {
+            let knownBytes = members.compactMap(\.bytes).reduce(0, &+)
+            let aggregateBytes: UInt64? = members.allSatisfy { $0.bytes != nil } ? knownBytes : nil
+            candidates.append(CleanupCandidate(id: startingID, name: "Xcode DerivedData", mechanism: .moveToTrash, currentScopeBytes: aggregateBytes, estimatedReclaimBytes: nil, trashMoveBytes: aggregateBytes, estimateBasis: "\(members.count) eligible top-level item(s); each item moves separately to Trash", scope: parent.path, status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: members.count, eligibleItemBytes: aggregateBytes, executionMembers: members)); startingID += 1
         }
         if recent > 0 { notices.append("DerivedData: \(recent) top-level item(s) modified today or yesterday excluded") }
-        let boundedOut = max(0, sorted.count - accepted - recent - unsafe)
+        let boundedOut = max(0, sorted.count - members.count - recent - unsafe)
         if boundedOut > 0 { notices.append("DerivedData: \(boundedOut) additional eligible top-level entries omitted by the 100-item safety/output bound; refine manually and rescan") }
     }
 
@@ -138,7 +143,7 @@ public struct Discoverer {
             eligible.append((child, item))
         }
         let eligibleBytes = eligible.map { $0.1.size }.reduce(0, &+)
-        candidates.append(CleanupCandidate(id: startingID, name: "~/Downloads", mechanism: .reportOnly, currentScopeBytes: directorySize(parent, ownerID: ownerID) ?? total, estimatedReclaimBytes: nil, trashMoveBytes: nil, estimateBasis: "report-only aggregate; \(eligible.count) old installer/archive file(s) total \(byteString(eligibleBytes)); individual files are not exposed or selectable", scope: parent.path, status: .reportOnly, reason: "The folder is never disposable. Review and select individual files in Finder or SimplyDiskSweeper before moving them to Trash.", command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: eligible.count, eligibleItemBytes: eligibleBytes)); startingID += 1
+        candidates.append(CleanupCandidate(id: startingID, name: "Downloads", mechanism: .reportOnly, currentScopeBytes: directorySize(parent, ownerID: ownerID) ?? total, estimatedReclaimBytes: nil, trashMoveBytes: nil, estimateBasis: "\(eligible.count) old installer/archive file(s) total \(byteString(eligibleBytes))", scope: parent.path, status: .reportOnly, reason: "Shown for information only. sds-clean will not clean or move anything in Downloads.", command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: eligible.count, eligibleItemBytes: eligibleBytes)); startingID += 1
     }
 }
 

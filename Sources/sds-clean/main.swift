@@ -7,9 +7,9 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 let help = """
 Usage: sds-clean [--dry-run | --json] [--yes --select <numbers|all>]
 
-Safely discover selected tool caches and Xcode DerivedData children not modified
-today or yesterday. Downloads appears once as a report-only aggregate and is
-never selected or cleared. Nothing is selected by default.
+Safely discover selected tool caches and an aggregate of Xcode DerivedData items
+not modified today or yesterday. Downloads is shown once for information; this
+CLI will not clean or move anything in Downloads. Nothing is selected by default.
 
   --dry-run             discover and print the full report; never mutate
   --json                stable JSON report; implies --dry-run
@@ -56,7 +56,8 @@ do {
     print("\nResults:")
     for outcome in outcomes {
         let estimates = "before \(byteString(outcome.beforeEstimateBytes)); after \(byteString(outcome.afterEstimateBytes))"
-        print("- \(outcome.candidateID): \(outcome.kind.rawValue) — \(estimates) — \(terminalSafe(outcome.detail))")
+        let counts = outcome.succeededItemCount.map { " — \($0) succeeded, \(outcome.failedItemCount ?? 0) failed, \(outcome.notRunItemCount ?? 0) not run" } ?? ""
+        print("- \(outcome.candidateID): \(outcome.kind.rawValue)\(counts) — \(estimates) — \(terminalSafe(outcome.detail))")
         if outcome.kind == .commandSucceeded || outcome.kind == .trashed { cleaned += 1 }; if outcome.kind == .commandFailed || outcome.kind == .invalidated { failures += 1 }
     }
     if !outcomes.isEmpty { print("Inspect Trash before emptying it.") }

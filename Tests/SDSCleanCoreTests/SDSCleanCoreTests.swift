@@ -13,6 +13,16 @@ final class RecordingTrasher: Trashing, @unchecked Sendable {
     func trash(_ url: URL) throws { paths.append(url.path) }
 }
 
+final class SelectiveTrasher: Trashing, @unchecked Sendable {
+    private(set) var paths: [String] = []
+    let failingName: String
+    init(failingName: String) { self.failingName = failingName }
+    func trash(_ url: URL) throws {
+        paths.append(url.path)
+        if url.lastPathComponent == failingName { throw CocoaError(.fileWriteUnknown) }
+    }
+}
+
 private func trashFixture(id: Int, name: String, bytes: UInt64?, scope: String, filePath: String?, fileIdentity: FileIdentity? = nil) -> CleanupCandidate {
     CleanupCandidate(id: id, name: name, mechanism: .moveToTrash, currentScopeBytes: bytes, estimatedReclaimBytes: nil, trashMoveBytes: bytes, estimateBasis: "test Trash size", scope: scope, status: .ready, reason: nil, command: nil, argv: nil, filePath: filePath, fileIdentity: fileIdentity)
 }
@@ -50,7 +60,7 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     let report = DiscoveryReport(version: "0.1.0", dryRun: true, mutationPerformed: false, candidates: [], notices: [])
     #expect(renderReport(report).contains("No mutations performed."))
     let data = try JSONEncoder().encode(report); let decoded = try JSONDecoder().decode(DiscoveryReport.self, from: data)
-    #expect(decoded.schemaVersion == 2); #expect(decoded.mutationPerformed == false); #expect(decoded.dryRun)
+    #expect(decoded.schemaVersion == 3); #expect(decoded.mutationPerformed == false); #expect(decoded.dryRun)
 }
 
 @Test func promoIsRestrained() {
@@ -108,7 +118,7 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     let nested = downloads.appendingPathComponent("nested"); try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true); try Data(repeating: 1, count: 200).write(to: nested.appendingPathComponent("nested.zip"))
     try FileManager.default.createSymbolicLink(at: downloads.appendingPathComponent("link.iso"), withDestinationURL: downloads.appendingPathComponent("eligible.ZIP"))
     let report = Discoverer(home: root, runner: FakeRunner { _, _, _, _ in ProcessResult(status: 1, stdout: "", stderr: "") }, ownerID: geteuid()).discover(version: "0.1.0")
-    let downloadsCandidates = report.candidates.filter { $0.name == "~/Downloads" }
+    let downloadsCandidates = report.candidates.filter { $0.name == "Downloads" }
     #expect(downloadsCandidates.count == 1)
     #expect(downloadsCandidates.first?.status == .reportOnly)
     #expect(downloadsCandidates.first?.currentScopeBytes == 410)
@@ -126,7 +136,7 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
         let url = downloads.appendingPathComponent("\(number).zip"); try Data(repeating: 1, count: number).write(to: url); try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: url.path)
     }
     let report = Discoverer(home: root, ownerID: geteuid()).discover(version: "0.1.0")
-    let downloadRows = report.candidates.filter { $0.name == "~/Downloads" }
+    let downloadRows = report.candidates.filter { $0.name == "Downloads" }
     #expect(downloadRows.count == 1); #expect(downloadRows.first?.eligibleItemCount == 25)
     #expect(downloadRows.first?.status == .reportOnly); #expect(downloadRows.first?.mechanism == .reportOnly)
     #expect(!renderReport(report).contains("25.zip")); #expect(!renderReport(report).contains("1.zip"))
@@ -227,13 +237,14 @@ private func pnpmFixture(result: ProcessResult, cache: Bool = true, helpResult: 
 
 @Test func downloadsAggregateCannotEnterAPlan() throws {
     let tool = toolFixture(id: 1, name: "pnpm", bytes: 1, scope: "/cache")
-    let download = CleanupCandidate(id: 2, name: "~/Downloads", mechanism: .reportOnly, currentScopeBytes: 100, estimatedReclaimBytes: nil, trashMoveBytes: nil, estimateBasis: "aggregate", scope: "/Downloads", status: .reportOnly, reason: "not selectable", command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: 1)
+    let download = CleanupCandidate(id: 2, name: "Downloads", mechanism: .reportOnly, currentScopeBytes: 100, estimatedReclaimBytes: nil, trashMoveBytes: nil, estimateBasis: "aggregate", scope: "/Downloads", status: .reportOnly, reason: "Shown for information only. sds-clean will not clean or move anything in Downloads.", command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: 1)
     #expect(try parseSelection("all", candidates: [tool, download]).map(\.id) == [1])
     #expect(throws: CLIError.self) { try parseSelection("all", candidates: [download]) }
     #expect(throws: CLIError.self) { try parseSelection("2", candidates: [tool, download]) }
     #expect(!isAffirmativeConfirmation("")); #expect(!isAffirmativeConfirmation("n")); #expect(isAffirmativeConfirmation("yes"))
     let report = DiscoveryReport(version: "x", dryRun: true, mutationPerformed: false, candidates: [download], notices: [])
-    #expect(renderReport(report).contains("Report only (not selectable)"))
+    #expect(renderReport(report).contains("Downloads information:"))
+    #expect(renderReport(report).contains("will not clean or move anything in Downloads"))
 }
 
 @Test func homebrewDryRunParserIsStrictAndUsesDecimalUnits() {
@@ -264,13 +275,53 @@ private func pnpmFixture(result: ProcessResult, cache: Bool = true, helpResult: 
     }
     let overrides = Dictionary(uniqueKeysWithValues: allowedTools.map { ($0.executableNames[0], [String]()) })
     let report = Discoverer(home: root, now: now, calendar: calendar, executableOverrides: overrides).discover(version: "x")
-    let derived = report.candidates.filter { $0.name.hasPrefix("DerivedData:") }
-    #expect(derived.map(\.name) == ["DerivedData: old"]); #expect(report.notices.contains { $0.contains("3 top-level item(s) modified today or yesterday excluded") })
-    let discovered = try #require(derived.first); try FileManager.default.setAttributes([.modificationDate: startToday], ofItemAtPath: discovered.filePath!)
-    let recentIdentity = try identity(at: URL(fileURLWithPath: discovered.filePath!))
-    let candidate = trashFixture(id: discovered.id, name: discovered.name, bytes: discovered.trashMoveBytes, scope: discovered.scope, filePath: discovered.filePath, fileIdentity: recentIdentity)
+    let derived = report.candidates.filter { $0.name == "Xcode DerivedData" }
+    #expect(derived.count == 1); #expect(derived.first?.eligibleItemCount == 1); #expect(report.notices.contains { $0.contains("3 top-level item(s) modified today or yesterday excluded") })
+    let discovered = try #require(derived.first); let member = try #require(discovered.executionMembers.first)
+    try FileManager.default.setAttributes([.modificationDate: startToday], ofItemAtPath: member.path)
+    let recentIdentity = try identity(at: URL(fileURLWithPath: member.path))
+    let candidate = CleanupCandidate(id: discovered.id, name: discovered.name, mechanism: .moveToTrash, currentScopeBytes: discovered.currentScopeBytes, estimatedReclaimBytes: nil, trashMoveBytes: discovered.trashMoveBytes, estimateBasis: discovered.estimateBasis, scope: discovered.scope, status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: 1, eligibleItemBytes: discovered.eligibleItemBytes, executionMembers: [TrashMember(path: member.path, identity: recentIdentity, bytes: member.bytes)])
     let trasher = RecordingTrasher(); let outcomes = Executor(home: root, trasher: trasher, now: now, calendar: calendar).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState())
     #expect(outcomes.first?.kind == .invalidated); #expect(outcomes.first?.detail.contains("recent-modification eligibility") == true); #expect(trasher.paths.isEmpty); try FileManager.default.removeItem(at: root)
+}
+
+@Test func derivedDataAggregateIsAuthoritativeBoundedAndMovesChildrenSeparately() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let parent = root.appendingPathComponent("Library/Developer/Xcode/DerivedData"); try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    let old = Date().addingTimeInterval(-3 * 86_400)
+    for name in ["alpha-secret", "beta-secret"] {
+        let child = parent.appendingPathComponent(name); try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: name == "alpha-secret" ? 10 : 20).write(to: child.appendingPathComponent("data"))
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: child.path)
+    }
+    let overrides = Dictionary(uniqueKeysWithValues: allowedTools.map { ($0.executableNames[0], [String]()) })
+    let report = Discoverer(home: root, executableOverrides: overrides).discover(version: "x")
+    let aggregate = try #require(report.candidates.first { $0.name == "Xcode DerivedData" })
+    #expect(aggregate.eligibleItemCount == 2); #expect(aggregate.trashMoveBytes == 30); #expect(aggregate.filePath == nil)
+    #expect(!renderReport(report).contains("alpha-secret")); #expect(!renderPlan(ExecutionPlan(candidates: [aggregate])).contains("beta-secret"))
+    let json = try JSONEncoder().encode(report); let jsonText = String(decoding: json, as: UTF8.self)
+    #expect(!jsonText.contains("executionMembers")); #expect(!jsonText.contains("alpha-secret")); #expect(jsonText.contains("eligibleItemCount")); #expect(jsonText.contains("eligibleItemBytes"))
+    let trasher = RecordingTrasher(); let outcomes = Executor(home: root, trasher: trasher).execute(ExecutionPlan(candidates: [aggregate]), cancellation: CancellationState())
+    #expect(outcomes.count == 1); #expect(outcomes.first?.kind == .trashed); #expect(outcomes.first?.succeededItemCount == 2); #expect(outcomes.first?.failedItemCount == 0)
+    #expect(Set(trasher.paths.map { URL(fileURLWithPath: $0).lastPathComponent }) == Set(["alpha-secret", "beta-secret"])); #expect(!trasher.paths.contains { URL(fileURLWithPath: $0).lastPathComponent == "DerivedData" })
+    try FileManager.default.removeItem(at: root)
+}
+
+@Test func derivedDataAggregateReportsPartialFailureAsOneBoundedResult() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let parent = root.appendingPathComponent("Library/Developer/Xcode/DerivedData"); try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    var members: [TrashMember] = []
+    for name in ["first-private-name", "second-private-name"] {
+        let child = parent.appendingPathComponent(name); try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-3 * 86_400)], ofItemAtPath: child.path)
+        members.append(TrashMember(path: child.path, identity: try identity(at: child), bytes: 0))
+    }
+    let candidate = CleanupCandidate(id: 7, name: "Xcode DerivedData", mechanism: .moveToTrash, currentScopeBytes: 0, estimatedReclaimBytes: nil, trashMoveBytes: 0, estimateBasis: "2 eligible top-level items", scope: parent.path, status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: 2, eligibleItemBytes: 0, executionMembers: members)
+    let trasher = SelectiveTrasher(failingName: "second-private-name")
+    let outcome = try #require(Executor(home: root, trasher: trasher).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState()).first)
+    #expect(outcome.kind == .commandFailed); #expect(outcome.succeededItemCount == 1); #expect(outcome.failedItemCount == 1); #expect(outcome.notRunItemCount == 0)
+    #expect(!outcome.detail.contains("first-private-name")); #expect(!outcome.detail.contains("second-private-name")); #expect(outcome.detail.contains("DerivedData folder was not moved"))
+    try FileManager.default.removeItem(at: root)
 }
 
 @Test func anyPlanDriftPreventsEarlierValidTrashItem() throws {
