@@ -7,9 +7,9 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 let help = """
 Usage: sds-clean [--dry-run | --json] [--yes --select <numbers|all>]
 
-Safely discover selected tool caches, Xcode DerivedData children not modified
-today or yesterday, and old downloaded installers/archives. Nothing is selected
-by default. Downloads is never cleared; 'all' excludes Downloads candidates.
+Safely discover selected tool caches and Xcode DerivedData children not modified
+today or yesterday. Downloads appears once as a report-only aggregate and is
+never selected or cleared. Nothing is selected by default.
 
   --dry-run             discover and print the full report; never mutate
   --json                stable JSON report; implies --dry-run

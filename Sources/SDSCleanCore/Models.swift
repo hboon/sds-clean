@@ -1,6 +1,6 @@
 import Foundation
 
-public enum Mechanism: String, Codable, Sendable { case permanentCommand, moveToTrash }
+public enum Mechanism: String, Codable, Sendable { case permanentCommand, moveToTrash, reportOnly }
 public enum CandidateStatus: String, Codable, Sendable { case ready, reportOnly, skipped }
 
 public struct FileIdentity: Codable, Equatable, Sendable {
@@ -37,7 +37,10 @@ public struct CleanupCandidate: Codable, Equatable, Sendable, Identifiable {
     public let id: Int
     public let name: String
     public let mechanism: Mechanism
-    public let estimatedBytes: UInt64?
+    public let currentScopeBytes: UInt64?
+    public let estimatedReclaimBytes: UInt64?
+    public let trashMoveBytes: UInt64?
+    public let estimateBasis: String
     public let scope: String
     public let status: CandidateStatus
     public let reason: String?
@@ -46,8 +49,10 @@ public struct CleanupCandidate: Codable, Equatable, Sendable, Identifiable {
     public let cacheScopes: [CacheScopeIdentity]?
     public let filePath: String?
     public let fileIdentity: FileIdentity?
-    public init(id: Int, name: String, mechanism: Mechanism, estimatedBytes: UInt64?, scope: String, status: CandidateStatus, reason: String?, command: CommandIdentity?, argv: [String]?, cacheScopes: [CacheScopeIdentity]? = nil, filePath: String?, fileIdentity: FileIdentity?) {
-        self.id = id; self.name = name; self.mechanism = mechanism; self.estimatedBytes = estimatedBytes; self.scope = scope; self.status = status; self.reason = reason; self.command = command; self.argv = argv; self.cacheScopes = cacheScopes; self.filePath = filePath; self.fileIdentity = fileIdentity
+    public let eligibleItemCount: Int?
+    public let eligibleItemBytes: UInt64?
+    public init(id: Int, name: String, mechanism: Mechanism, currentScopeBytes: UInt64?, estimatedReclaimBytes: UInt64?, trashMoveBytes: UInt64?, estimateBasis: String, scope: String, status: CandidateStatus, reason: String?, command: CommandIdentity?, argv: [String]?, cacheScopes: [CacheScopeIdentity]? = nil, filePath: String?, fileIdentity: FileIdentity?, eligibleItemCount: Int? = nil, eligibleItemBytes: UInt64? = nil) {
+        self.id = id; self.name = name; self.mechanism = mechanism; self.currentScopeBytes = currentScopeBytes; self.estimatedReclaimBytes = estimatedReclaimBytes; self.trashMoveBytes = trashMoveBytes; self.estimateBasis = estimateBasis; self.scope = scope; self.status = status; self.reason = reason; self.command = command; self.argv = argv; self.cacheScopes = cacheScopes; self.filePath = filePath; self.fileIdentity = fileIdentity; self.eligibleItemCount = eligibleItemCount; self.eligibleItemBytes = eligibleItemBytes
     }
 }
 
@@ -56,12 +61,20 @@ public struct DiscoveryReport: Codable, Sendable {
     public let version: String
     public let dryRun: Bool
     public let mutationPerformed: Bool
-    public let downloadsTotalBytes: UInt64?
-    public let downloadsNote: String
+    public let estimatedPermanentReclaimBytes: UInt64
+    public let unestimatedPermanentCandidateCount: Int
+    public let bytesMovedToTrash: UInt64
+    public let unestimatedTrashCandidateCount: Int
     public let candidates: [CleanupCandidate]
     public let notices: [String]
-    public init(schemaVersion: Int = 1, version: String, dryRun: Bool, mutationPerformed: Bool, downloadsTotalBytes: UInt64?, downloadsNote: String, candidates: [CleanupCandidate], notices: [String]) {
-        self.schemaVersion = schemaVersion; self.version = version; self.dryRun = dryRun; self.mutationPerformed = mutationPerformed; self.downloadsTotalBytes = downloadsTotalBytes; self.downloadsNote = downloadsNote; self.candidates = candidates; self.notices = notices
+    public init(schemaVersion: Int = 2, version: String, dryRun: Bool, mutationPerformed: Bool, candidates: [CleanupCandidate], notices: [String]) {
+        self.schemaVersion = schemaVersion; self.version = version; self.dryRun = dryRun; self.mutationPerformed = mutationPerformed
+        let ready = candidates.filter { $0.status == .ready }
+        self.estimatedPermanentReclaimBytes = ready.compactMap { $0.mechanism == .permanentCommand ? $0.estimatedReclaimBytes : nil }.reduce(0, &+)
+        self.unestimatedPermanentCandidateCount = ready.filter { $0.mechanism == .permanentCommand && $0.estimatedReclaimBytes == nil }.count
+        self.bytesMovedToTrash = ready.compactMap { $0.mechanism == .moveToTrash ? $0.trashMoveBytes : nil }.reduce(0, &+)
+        self.unestimatedTrashCandidateCount = ready.filter { $0.mechanism == .moveToTrash && $0.trashMoveBytes == nil }.count
+        self.candidates = candidates; self.notices = notices
     }
 }
 
@@ -128,9 +141,8 @@ public func parseArguments(_ arguments: [String], isTTY: Bool) throws -> CLIOpti
 public func parseSelection(_ text: String, candidates: [CleanupCandidate]) throws -> [CleanupCandidate] {
     let ready = candidates.filter { $0.status == .ready }
     if text.lowercased() == "all" {
-        let nonDownloads = ready.filter { !$0.name.hasPrefix("Download:") }
-        guard !nonDownloads.isEmpty else { throw CLIError.usage("selection is empty; 'all' excludes Downloads candidates") }
-        return nonDownloads
+        guard !ready.isEmpty else { throw CLIError.usage("selection is empty") }
+        return ready
     }
     var seen = Set<Int>(); var chosen: [CleanupCandidate] = []
     for part in text.split(separator: ",", omittingEmptySubsequences: false) {

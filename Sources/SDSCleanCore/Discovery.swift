@@ -3,17 +3,19 @@ import Foundation
 
 public struct ToolDefinition: Sendable {
     public let name: String; public let executableNames: [String]; public let versionArguments: [String]; public let helpArguments: [String]
-    public let helpToken: String; public let acceptedVersion: @Sendable (String) -> Bool; public let cleanupArguments: [String]; public let cachePaths: [String]
+    public let helpToken: String; public let acceptedVersion: @Sendable (String) -> Bool; public let cleanupArguments: [String]; public let cachePaths: [String]; public let estimate: ToolEstimate
 }
 
+public enum ToolEstimate: Sendable { case fullScope(String), homebrewDryRun, unavailable(String) }
+
 public let allowedTools: [ToolDefinition] = [
-    .init(name: "Homebrew", executableNames: ["brew"], versionArguments: ["--version"], helpArguments: ["cleanup", "--help"], helpToken: "prune", acceptedVersion: { $0.contains("Homebrew") }, cleanupArguments: ["cleanup", "--prune=120"], cachePaths: ["Library/Caches/Homebrew"]),
-    .init(name: "npm", executableNames: ["npm"], versionArguments: ["--version"], helpArguments: ["cache", "--help"], helpToken: "clean", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["cache", "clean", "--force"], cachePaths: [".npm"]),
-    .init(name: "pnpm", executableNames: ["pnpm"], versionArguments: ["--version"], helpArguments: ["store", "--help"], helpToken: "prune", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["store", "prune"], cachePaths: ["Library/pnpm/store", ".local/share/pnpm/store"]),
-    .init(name: "Yarn Classic", executableNames: ["yarn"], versionArguments: ["--version"], helpArguments: ["cache", "--help"], helpToken: "clean", acceptedVersion: { $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("1.") }, cleanupArguments: ["cache", "clean"], cachePaths: ["Library/Caches/Yarn"]),
-    .init(name: "Bun", executableNames: ["bun"], versionArguments: ["--version"], helpArguments: ["pm", "--help"], helpToken: "cache", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["pm", "cache", "rm"], cachePaths: [".bun/install/cache"]),
-    .init(name: "SwiftPM", executableNames: ["swift"], versionArguments: ["--version"], helpArguments: ["package", "help", "purge-cache"], helpToken: "purge-cache", acceptedVersion: { $0.contains("Swift version") }, cleanupArguments: ["package", "purge-cache"], cachePaths: ["Library/Caches/org.swift.swiftpm"]),
-    .init(name: "CocoaPods", executableNames: ["pod"], versionArguments: ["--version"], helpArguments: ["cache", "--help"], helpToken: "clean", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["cache", "clean", "--all"], cachePaths: ["Library/Caches/CocoaPods"]),
+    .init(name: "Homebrew", executableNames: ["brew"], versionArguments: ["--version"], helpArguments: ["cleanup", "--help"], helpToken: "prune", acceptedVersion: { $0.contains("Homebrew") }, cleanupArguments: ["cleanup", "--prune=120"], cachePaths: ["Library/Caches/Homebrew"], estimate: .homebrewDryRun),
+    .init(name: "npm", executableNames: ["npm"], versionArguments: ["--version"], helpArguments: ["cache", "--help"], helpToken: "clean", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["cache", "clean", "--force"], cachePaths: [".npm"], estimate: .fullScope("command clears the discovered npm cache scope")),
+    .init(name: "pnpm", executableNames: ["pnpm"], versionArguments: ["--version"], helpArguments: ["store", "--help"], helpToken: "prune", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["store", "prune"], cachePaths: ["Library/pnpm/store", ".local/share/pnpm/store"], estimate: .unavailable("pnpm store prune removes only unreferenced packages; no reliable byte estimate is available")),
+    .init(name: "Yarn Classic", executableNames: ["yarn"], versionArguments: ["--version"], helpArguments: ["cache", "--help"], helpToken: "clean", acceptedVersion: { $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("1.") }, cleanupArguments: ["cache", "clean"], cachePaths: ["Library/Caches/Yarn"], estimate: .fullScope("command clears the discovered Yarn Classic cache scope")),
+    .init(name: "Bun", executableNames: ["bun"], versionArguments: ["--version"], helpArguments: ["pm", "--help"], helpToken: "cache", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["pm", "cache", "rm"], cachePaths: [".bun/install/cache"], estimate: .fullScope("command removes the discovered Bun package cache scope")),
+    .init(name: "SwiftPM", executableNames: ["swift"], versionArguments: ["--version"], helpArguments: ["package", "help", "purge-cache"], helpToken: "purge-cache", acceptedVersion: { $0.contains("Swift version") }, cleanupArguments: ["package", "purge-cache"], cachePaths: ["Library/Caches/org.swift.swiftpm"], estimate: .fullScope("command purges the discovered SwiftPM global cache scope")),
+    .init(name: "CocoaPods", executableNames: ["pod"], versionArguments: ["--version"], helpArguments: ["cache", "--help"], helpToken: "clean", acceptedVersion: { Int($0.split(separator: ".").first ?? "") != nil }, cleanupArguments: ["cache", "clean", "--all"], cachePaths: ["Library/Caches/CocoaPods"], estimate: .fullScope("command clears all pods in the discovered CocoaPods cache scope")),
 ]
 
 public func installationLayoutAllowed(name: String, launcher: String, resolved: String, home: URL) -> Bool {
@@ -55,8 +57,8 @@ public struct Discoverer {
             if let notice = result.1 { notices.append(notice) }
         }
         discoverDerivedData(startingID: &nextID, candidates: &candidates, notices: &notices)
-        let downloadsTotal = discoverDownloads(startingID: &nextID, candidates: &candidates, notices: &notices)
-        return DiscoveryReport(version: version, dryRun: true, mutationPerformed: false, downloadsTotalBytes: downloadsTotal, downloadsNote: "Downloads folder is never cleared; only individually listed 30+ day-old installer/archive files can be selected and moved to Trash. 'all' excludes them.", candidates: candidates, notices: notices)
+        discoverDownloads(startingID: &nextID, candidates: &candidates, notices: &notices)
+        return DiscoveryReport(version: version, dryRun: true, mutationPerformed: false, candidates: candidates, notices: notices)
     }
 
     private func launcherPaths(named name: String) -> [String] {
@@ -91,7 +93,16 @@ public struct Discoverer {
         }
         guard !scopes.isEmpty else { return (nil, "\(definition.name): nothing eligible found — no current-user-owned in-home cache scope; no cleanup command will run") }
         let commandIdentity = CommandIdentity(path: resolved, device: file.device, inode: file.inode, size: file.size, modified: file.modified, ownerID: file.ownerID, version: version)
-        return (CleanupCandidate(id: id, name: definition.name, mechanism: .permanentCommand, estimatedBytes: size, scope: scopes.joined(separator: ", "), status: .ready, reason: nil, command: commandIdentity, argv: [resolved] + definition.cleanupArguments, cacheScopes: scopeIdentities, filePath: nil, fileIdentity: nil), nil)
+        let estimate: UInt64?; let basis: String
+        switch definition.estimate {
+        case let .fullScope(description): estimate = size; basis = description
+        case let .unavailable(description): estimate = nil; basis = description
+        case .homebrewDryRun:
+            let dryRun = runner.run(executable: launcher, arguments: definition.cleanupArguments + ["--dry-run"], environment: environment, cwd: "/")
+            estimate = dryRun.status == 0 ? parseHomebrewReclaimBytes(dryRun.stdout + "\n" + dryRun.stderr) : nil
+            basis = estimate == nil ? "Homebrew dry-run did not provide a reliable reclaim total; excluded from the numeric total" : "reported by brew cleanup --prune=120 --dry-run"
+        }
+        return (CleanupCandidate(id: id, name: definition.name, mechanism: .permanentCommand, currentScopeBytes: size, estimatedReclaimBytes: estimate, trashMoveBytes: nil, estimateBasis: basis, scope: scopes.joined(separator: ", "), status: .ready, reason: nil, command: commandIdentity, argv: [resolved] + definition.cleanupArguments, cacheScopes: scopeIdentities, filePath: nil, fileIdentity: nil), nil)
     }
 
     private func discoverDerivedData(startingID: inout Int, candidates: inout [CleanupCandidate], notices: inout [String]) {
@@ -105,16 +116,16 @@ public struct Discoverer {
             guard item.modified < cutoff else { recent += 1; continue }
             guard accepted < 100 else { continue }
             let size = directorySize(child, ownerID: ownerID)
-            candidates.append(CleanupCandidate(id: startingID, name: "DerivedData: \(child.lastPathComponent)", mechanism: .moveToTrash, estimatedBytes: size, scope: parent.path, status: .ready, reason: nil, command: nil, argv: nil, filePath: child.path, fileIdentity: item)); startingID += 1; accepted += 1
+            candidates.append(CleanupCandidate(id: startingID, name: "DerivedData: \(child.lastPathComponent)", mechanism: .moveToTrash, currentScopeBytes: size, estimatedReclaimBytes: nil, trashMoveBytes: size, estimateBasis: "current item size; moving to Trash does not free disk space until Trash is emptied", scope: parent.path, status: .ready, reason: nil, command: nil, argv: nil, filePath: child.path, fileIdentity: item)); startingID += 1; accepted += 1
         }
         if recent > 0 { notices.append("DerivedData: \(recent) top-level item(s) modified today or yesterday excluded") }
         let boundedOut = max(0, sorted.count - accepted - recent - unsafe)
         if boundedOut > 0 { notices.append("DerivedData: \(boundedOut) additional eligible top-level entries omitted by the 100-item safety/output bound; refine manually and rescan") }
     }
 
-    private func discoverDownloads(startingID: inout Int, candidates: inout [CleanupCandidate], notices: inout [String]) -> UInt64? {
+    private func discoverDownloads(startingID: inout Int, candidates: inout [CleanupCandidate], notices: inout [String]) {
         let parent = home.appendingPathComponent("Downloads").standardizedFileURL
-        guard let children = try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: [.isRegularFileKey, .isPackageKey, .isAliasFileKey], options: []) else { notices.append("Downloads: unavailable or blocked by macOS privacy controls; skipped without requesting Full Disk Access or sudo") ; return nil }
+        guard let children = try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: [.isRegularFileKey, .isPackageKey, .isAliasFileKey], options: []) else { notices.append("Downloads: unavailable or blocked by macOS privacy controls; skipped without requesting Full Disk Access or sudo") ; return }
         let parentIdentity = try? identity(at: parent); let homeIdentity = try? identity(at: home); let cutoff = now.addingTimeInterval(-30 * 86_400)
         var total: UInt64 = 0; var eligible: [(URL, FileIdentity)] = []
         let suffixes = [".dmg", ".pkg", ".xip", ".iso", ".zip", ".tar", ".tgz", ".tar.gz", ".tar.bz2", ".tar.xz", ".7z", ".rar"]
@@ -126,7 +137,18 @@ public struct Discoverer {
             guard !name.hasPrefix("."), !lower.hasSuffix(".download"), !lower.hasSuffix(".crdownload"), !lower.hasSuffix(".part"), item.modified <= cutoff, suffixes.contains(where: { lower.hasSuffix($0) }) else { continue }
             eligible.append((child, item))
         }
-        for (child, item) in eligible.sorted(by: { $0.1.size > $1.1.size }).prefix(20) { candidates.append(CleanupCandidate(id: startingID, name: "Download: \(child.lastPathComponent)", mechanism: .moveToTrash, estimatedBytes: item.size, scope: parent.path, status: .ready, reason: nil, command: nil, argv: nil, filePath: child.path, fileIdentity: item)); startingID += 1 }
-        return directorySize(parent, ownerID: ownerID) ?? total
+        let eligibleBytes = eligible.map { $0.1.size }.reduce(0, &+)
+        candidates.append(CleanupCandidate(id: startingID, name: "~/Downloads", mechanism: .reportOnly, currentScopeBytes: directorySize(parent, ownerID: ownerID) ?? total, estimatedReclaimBytes: nil, trashMoveBytes: nil, estimateBasis: "report-only aggregate; \(eligible.count) old installer/archive file(s) total \(byteString(eligibleBytes)); individual files are not exposed or selectable", scope: parent.path, status: .reportOnly, reason: "The folder is never disposable. Review and select individual files in Finder or SimplyDiskSweeper before moving them to Trash.", command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: eligible.count, eligibleItemBytes: eligibleBytes)); startingID += 1
     }
+}
+
+public func parseHomebrewReclaimBytes(_ output: String) -> UInt64? {
+    let pattern = #"(?i)would free(?: approximately)?(?::|\s)+([0-9]+(?:\.[0-9]+)?)\s*(bytes?|kb|mb|gb|tb)\b"#
+    guard let expression = try? NSRegularExpression(pattern: pattern), let match = expression.matches(in: output, range: NSRange(output.startIndex..., in: output)).last,
+          let valueRange = Range(match.range(at: 1), in: output), let unitRange = Range(match.range(at: 2), in: output), let value = Double(output[valueRange]) else { return nil }
+    let multiplier: Double
+    switch output[unitRange].lowercased() { case "kb": multiplier = 1_000; case "mb": multiplier = 1_000_000; case "gb": multiplier = 1_000_000_000; case "tb": multiplier = 1_000_000_000_000; default: multiplier = 1 }
+    let bytes = value * multiplier
+    guard bytes.isFinite, bytes >= 0, bytes <= Double(UInt64.max) else { return nil }
+    return UInt64(bytes.rounded())
 }

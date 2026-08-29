@@ -57,10 +57,10 @@ public struct Executor {
             if candidate.mechanism == .permanentCommand, let argv = candidate.argv, let executable = argv.first {
                 let brew = candidate.name == "Homebrew"; let result = runner.run(executable: executable, arguments: Array(argv.dropFirst()), environment: sanitizedEnvironment(home: home.path, executable: executable, brew: brew), cwd: "/")
                 let after = candidate.cacheScopes?.compactMap { directorySize(URL(fileURLWithPath: $0.path), ownerID: ownerID) }.reduce(0, &+)
-                outcomes.append(ItemOutcome(candidateID: candidate.id, kind: result.status == 0 ? .commandSucceeded : .commandFailed, exitCode: result.status, beforeEstimateBytes: candidate.estimatedBytes, afterEstimateBytes: after, detail: result.status == 0 ? "Permanent cleanup command completed" : "Permanent cleanup command failed; no deletion fallback used: \(result.stderr.prefix(240))"))
+                outcomes.append(ItemOutcome(candidateID: candidate.id, kind: result.status == 0 ? .commandSucceeded : .commandFailed, exitCode: result.status, beforeEstimateBytes: candidate.currentScopeBytes, afterEstimateBytes: after, detail: result.status == 0 ? "Permanent cleanup command completed" : "Permanent cleanup command failed; no deletion fallback used: \(result.stderr.prefix(240))"))
             } else if let path = candidate.filePath {
-                do { try trasher.trash(URL(fileURLWithPath: path)); outcomes.append(ItemOutcome(candidateID: candidate.id, kind: .trashed, exitCode: nil, beforeEstimateBytes: candidate.estimatedBytes, afterEstimateBytes: nil, detail: "Moved to Trash; after estimate is not asserted and this does not equal freed disk space")) }
-                catch { outcomes.append(ItemOutcome(candidateID: candidate.id, kind: .commandFailed, exitCode: nil, beforeEstimateBytes: candidate.estimatedBytes, afterEstimateBytes: candidate.estimatedBytes, detail: "Move to Trash failed: \(error)")) }
+                do { try trasher.trash(URL(fileURLWithPath: path)); outcomes.append(ItemOutcome(candidateID: candidate.id, kind: .trashed, exitCode: nil, beforeEstimateBytes: candidate.trashMoveBytes, afterEstimateBytes: nil, detail: "Moved to Trash; after estimate is not asserted and this does not equal freed disk space")) }
+                catch { outcomes.append(ItemOutcome(candidateID: candidate.id, kind: .commandFailed, exitCode: nil, beforeEstimateBytes: candidate.trashMoveBytes, afterEstimateBytes: candidate.trashMoveBytes, detail: "Move to Trash failed: \(error)")) }
             }
         }
         return outcomes
