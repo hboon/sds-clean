@@ -3,6 +3,12 @@ import Foundation
 public let sdsCleanVersion = "0.1.0"
 public let promoURL = "https://motionobj.com/simplydisksweeper/?utm_source=sds-clean&utm_medium=cli&utm_campaign=cleanup-success"
 
+public let modeSummary = """
+sds-clean chooses a mode explicitly.
+  sds-clean --dry-run  Report what is eligible without changes.
+  sds-clean --delete   Start interactive cleanup with selection and confirmation.
+"""
+
 public func byteString(_ bytes: UInt64?) -> String { guard let bytes else { return "unknown" }; return ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file) }
 
 public func renderReport(_ report: DiscoveryReport, dryRun: Bool = true) -> String {

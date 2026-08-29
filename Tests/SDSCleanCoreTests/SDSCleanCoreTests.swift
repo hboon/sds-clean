@@ -32,10 +32,17 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
 }
 
 @Test func argumentSafety() throws {
+    #expect(try parseArguments([], isTTY: false) == CLIOptions())
     #expect(try parseArguments(["--json"], isTTY: false).dryRun)
+    #expect(try parseArguments(["--delete"], isTTY: true).delete)
     #expect(throws: CLIError.self) { try parseArguments(["--yes"], isTTY: true) }
-    #expect(throws: CLIError.self) { try parseArguments(["--yes", "--select", "all"], isTTY: false) }
-    #expect(throws: CLIError.self) { try parseArguments(["--dry-run", "--yes", "--select", "all"], isTTY: true) }
+    #expect(throws: CLIError.self) { try parseArguments(["--delete", "--yes", "--select", "all"], isTTY: false) }
+    #expect(throws: CLIError.self) { try parseArguments(["--yes", "--select", "all"], isTTY: true) }
+    #expect(throws: CLIError.self) { try parseArguments(["--dry-run", "--delete"], isTTY: true) }
+    #expect(throws: CLIError.self) { try parseArguments(["--dry-run", "--json"], isTTY: false) }
+    #expect(throws: CLIError.self) { try parseArguments(["--help", "--dry-run"], isTTY: false) }
+    #expect(try parseArguments(["--delete", "--yes", "--select", "all"], isTTY: true).selection == "all")
+    #expect(modeSummary.components(separatedBy: "\n").count == 3); #expect(modeSummary.contains("--dry-run")); #expect(modeSummary.contains("--delete"))
     #expect(!isAffirmativeConfirmation(nil)); #expect(!isAffirmativeConfirmation("")); #expect(!isAffirmativeConfirmation(" yes")); #expect(!isAffirmativeConfirmation("yes "))
     #expect(isAffirmativeConfirmation("y")); #expect(isAffirmativeConfirmation("yes")); #expect(!isAffirmativeConfirmation("YES"))
     #expect(ExitCode.success.rawValue == 0); #expect(ExitCode.usage.rawValue == 2); #expect(ExitCode.partial.rawValue == 3); #expect(ExitCode.invalidated.rawValue == 4); #expect(ExitCode.cancelled.rawValue == 130)

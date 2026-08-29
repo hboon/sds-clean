@@ -5,7 +5,7 @@ import SDSCleanCore
 let isTTY = isatty(STDIN_FILENO) == 1 && isatty(STDOUT_FILENO) == 1
 let arguments = Array(CommandLine.arguments.dropFirst())
 let help = """
-Usage: sds-clean [--dry-run | --json] [--yes --select <numbers|all>]
+Usage: sds-clean [--dry-run | --json | --delete [--yes --select <numbers|all>]]
 
 Safely discover selected tool caches and an aggregate of Xcode DerivedData items
 not modified today or yesterday. Downloads is shown once for information; this
@@ -13,7 +13,9 @@ CLI will not clean or move anything in Downloads. Nothing is selected by default
 
   --dry-run             discover and print the full report; never mutate
   --json                stable JSON report; implies --dry-run
-  --yes --select VALUE  execute a fully visible plan on a TTY (VALUE: numbers or all)
+  --delete              start interactive selection, confirmation, and cleanup
+  --delete --yes --select VALUE
+                        execute a fully visible plan on a TTY (VALUE: numbers or all)
   --help                show this help
   --version             show version
 """
@@ -24,7 +26,7 @@ do {
     let options = try parseArguments(arguments, isTTY: isTTY)
     if options.help { print(help); finish(.success) }
     if options.version { print(sdsCleanVersion); finish(.success) }
-    if !options.dryRun && !isTTY { throw CLIError.usage("interactive cleanup requires a TTY; use --dry-run or --json") }
+    if !options.dryRun && !options.delete { print(modeSummary); finish(.success) }
     let home = FileManager.default.homeDirectoryForCurrentUser
     let report = Discoverer(home: home).discover(version: sdsCleanVersion)
     if options.json {
@@ -32,7 +34,7 @@ do {
         FileHandle.standardOutput.write(try encoder.encode(report)); print(); finish(.success)
     }
     print(renderReport(report, dryRun: options.dryRun))
-    if options.dryRun { finish(.success) }
+    if !options.delete { finish(.success) }
     let selectionText: String
     if options.yes { selectionText = options.selection! }
     else {

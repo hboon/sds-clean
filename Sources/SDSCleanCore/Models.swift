@@ -119,6 +119,7 @@ public enum ExitCode: Int32 { case success = 0, usage = 2, partial = 3, invalida
 public struct CLIOptions: Equatable {
     public var dryRun = false
     public var json = false
+    public var delete = false
     public var yes = false
     public var selection: String?
     public var help = false
@@ -132,11 +133,12 @@ public enum CLIError: Error, Equatable, CustomStringConvertible {
 }
 
 public func parseArguments(_ arguments: [String], isTTY: Bool) throws -> CLIOptions {
-    var result = CLIOptions(); var index = 0
+    var result = CLIOptions(); var index = 0; var modes = Set<String>()
     while index < arguments.count {
         switch arguments[index] {
-        case "--dry-run": result.dryRun = true
-        case "--json": result.json = true; result.dryRun = true
+        case "--dry-run": result.dryRun = true; modes.insert("dry-run")
+        case "--json": result.json = true; result.dryRun = true; modes.insert("json")
+        case "--delete": result.delete = true; modes.insert("delete")
         case "--yes": result.yes = true
         case "--select":
             index += 1
@@ -148,10 +150,16 @@ public func parseArguments(_ arguments: [String], isTTY: Bool) throws -> CLIOpti
         }
         index += 1
     }
+    if result.help || result.version {
+        guard arguments.count == 1 else { throw CLIError.usage("--help and --version must be used on their own") }
+        return result
+    }
+    guard modes.count <= 1 else { throw CLIError.usage("choose exactly one mode: --dry-run, --json, or --delete") }
     if result.yes && result.selection == nil { throw CLIError.usage("--yes requires --select <numbers|all>") }
     if result.selection != nil && !result.yes { throw CLIError.usage("--select is only valid with --yes") }
+    if (result.yes || result.selection != nil) && !result.delete { throw CLIError.usage("--yes and --select require --delete") }
     if result.yes && !isTTY { throw CLIError.usage("--yes cleanup requires an interactive TTY") }
-    if result.dryRun && (result.yes || result.selection != nil) { throw CLIError.usage("dry-run modes cannot execute a selection") }
+    if result.delete && !isTTY { throw CLIError.usage("--delete requires an interactive TTY") }
     return result
 }
 

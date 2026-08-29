@@ -9,12 +9,12 @@ It does not scan Home generally, use telemetry or network calls, invoke a shell,
 ```sh
 sds-clean --dry-run
 sds-clean --json
-sds-clean
-sds-clean --yes --select 1,3
+sds-clean --delete
+sds-clean --delete --yes --select 1,3
 sds-clean --version
 ```
 
-Interactive runs select nothing by default and require a second exact-TTY confirmation. `--json` implies dry-run. `--yes` still requires an explicit selection and a TTY-visible plan. The Downloads information row cannot enter an execution plan. Selecting the DerivedData aggregate moves each captured, still-eligible child separately through macOS Trash; it never moves the DerivedData folder itself.
+Bare `sds-clean` prints a short mode summary and exits without scanning. Exactly one operational mode is required: `--dry-run` for a human report, `--json` for a machine-readable dry-run, or `--delete` for interactive cleanup. Interactive runs select nothing by default and require a second exact-TTY confirmation. `--yes --select` is available only with `--delete`, still requires a TTY, and always prints the exact plan before execution. The Downloads information row cannot enter an execution plan. Selecting the DerivedData aggregate moves each captured, still-eligible child separately through macOS Trash; it never moves the DerivedData folder itself.
 
 Dry-run output separates current scope size from estimated reclaim. Commands that clear their whole discovered cache scope use that scope size as their estimate. Homebrew uses the total reported by `brew cleanup --prune=120 --dry-run`; if that total cannot be parsed reliably, Homebrew is excluded from the numeric total. Subset commands such as `pnpm store prune` are also explicitly unestimated and excluded. DerivedData sizes are reported separately as bytes that would move to Trash—not immediately freed disk space.
 
