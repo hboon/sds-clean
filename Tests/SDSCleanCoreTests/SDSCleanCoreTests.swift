@@ -105,7 +105,7 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     let report = DiscoveryReport(version: "0.1.0", dryRun: true, mutationPerformed: false, candidates: candidates, notices: Array(repeating: "notice", count: 100))
     #expect(renderReport(report).components(separatedBy: "\n").count < 1_000)
     #expect(renderPlan(ExecutionPlan(candidates: Array(candidates.prefix(1)))).contains("Move to Trash"))
-    #expect(renderReport(report).contains("bytes moving to Trash"))
+    #expect(renderReport(report).contains("you can undo by restoring from Trash"))
     #expect(!renderReport(report).contains("total size"))
     #expect(terminalSafe("bad\nname\u{1b}") == "bad\\u{a}name\\u{1b}")
 }
@@ -258,16 +258,17 @@ private func pnpmFixture(result: ProcessResult, cache: Bool = true, helpResult: 
     let dryLines = renderReport(report, dryRun: true).components(separatedBy: "\n")
     let deleteLines = renderReport(report, dryRun: false).components(separatedBy: "\n")
     #expect(Array(dryLines.dropLast(2)) == deleteLines)
-    #expect(dryLines.first == "sds-clean x — Cleanup plan")
+    #expect(dryLines.first == "Estimated cleanup: 42 bytes")
     #expect(dryLines.last == "This is a dry run; no files will be deleted.")
 }
 
-@Test func homebrewOutputSeparatesMeasuredCacheFromBroaderCleanupEstimate() {
+@Test func humanOutputOnlyShowsCompactCleanupEstimates() {
     let candidate = CleanupCandidate(id: 1, name: "Homebrew", mechanism: .permanentCommand, currentScopeBytes: 298_500_000, estimatedReclaimBytes: 346_100_000, trashMoveBytes: nil, estimateBasis: "reported by brew cleanup --prune=120 --dry-run", scope: "/Users/test/Library/Caches/Homebrew", status: .ready, reason: nil, command: nil, argv: ["/opt/homebrew/bin/brew", "cleanup", "--prune=120"], filePath: nil, fileIdentity: nil)
     let output = renderReport(DiscoveryReport(version: "x", dryRun: true, mutationPerformed: false, candidates: [candidate], notices: []))
-    #expect(output.contains("measured Homebrew cache 298.5 MB | Homebrew cleanup estimate 346.1 MB"))
-    #expect(output.contains("estimate can include old formula versions and other stale data outside the measured cache"))
-    #expect(!output.contains("current scope")); #expect(!output.contains("estimated reclaim"))
+    #expect(output.contains("- Homebrew | estimate: 346.1 MB"))
+    for hidden in ["298.5 MB", "measured", "estimate basis", "/Users/test", "/opt/homebrew", "argv", "formula versions"] {
+        #expect(!output.contains(hidden))
+    }
 }
 
 @Test func homebrewDryRunParserIsStrictAndUsesDecimalUnits() {
@@ -284,7 +285,44 @@ private func pnpmFixture(result: ProcessResult, cache: Bool = true, helpResult: 
     let unknownTrash = CleanupCandidate(id: 4, name: "DerivedData: unreadable", mechanism: .moveToTrash, currentScopeBytes: nil, estimatedReclaimBytes: nil, trashMoveBytes: nil, estimateBasis: "unknown", scope: "/DerivedData", status: .ready, reason: nil, command: nil, argv: nil, filePath: "/DerivedData/unreadable", fileIdentity: nil)
     let report = DiscoveryReport(version: "x", dryRun: true, mutationPerformed: false, candidates: [known, unknown, trash, unknownTrash], notices: [])
     #expect(report.estimatedPermanentReclaimBytes == 20); #expect(report.unestimatedPermanentCandidateCount == 1); #expect(report.plannedTrashBytes == 10); #expect(report.unestimatedTrashSelectionCount == 1)
-    #expect(renderReport(report).contains("not freed until Trash is emptied"))
+    let output = renderReport(report)
+    #expect(output.contains("Estimated cleanup: 30 bytes plus items with unavailable estimates"))
+    #expect(output.contains("- npm | estimate: 20 bytes")); #expect(output.contains("- pnpm | estimate: unavailable"))
+    #expect(output.contains("- DerivedData: old | estimate: 10 bytes")); #expect(output.contains("- DerivedData: unreadable | estimate: unavailable"))
+    #expect(output.contains("you can undo by restoring from Trash"))
+}
+
+@Test func compactHumanPlanMatchesRequiredStructureAndHidesDiagnostics() {
+    let candidates = [
+        CleanupCandidate(id: 1, name: "Homebrew", mechanism: .permanentCommand, currentScopeBytes: 1, estimatedReclaimBytes: 346_100_000, trashMoveBytes: nil, estimateBasis: "private basis", scope: "/private/homebrew", status: .ready, reason: nil, command: nil, argv: ["/private/brew", "cleanup"], filePath: nil, fileIdentity: nil),
+        CleanupCandidate(id: 2, name: "npm", mechanism: .permanentCommand, currentScopeBytes: 2, estimatedReclaimBytes: 29_470_000_000, trashMoveBytes: nil, estimateBasis: "private basis", scope: "/private/npm", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil),
+        CleanupCandidate(id: 3, name: "Yarn Classic", mechanism: .permanentCommand, currentScopeBytes: 3, estimatedReclaimBytes: 6_000, trashMoveBytes: nil, estimateBasis: "private basis", scope: "/private/yarn", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil),
+        CleanupCandidate(id: 4, name: "SwiftPM", mechanism: .permanentCommand, currentScopeBytes: 4, estimatedReclaimBytes: 4_140_000_000, trashMoveBytes: nil, estimateBasis: "private basis", scope: "/private/swift", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil),
+        CleanupCandidate(id: 5, name: "Xcode DerivedData", mechanism: .moveToTrash, currentScopeBytes: 43_570_000_000, estimatedReclaimBytes: nil, trashMoveBytes: 43_570_000_000, estimateBasis: "99 private members", scope: "/private/DerivedData", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: 99, eligibleItemBytes: 43_570_000_000),
+        CleanupCandidate(id: 6, name: "Downloads", mechanism: .moveToTrash, currentScopeBytes: 20_000_000, estimatedReclaimBytes: nil, trashMoveBytes: 20_000_000, estimateBasis: "2 private members", scope: "/private/Downloads", status: .ready, reason: nil, command: nil, argv: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: 2, eligibleItemBytes: 20_000_000),
+        CleanupCandidate(id: 7, name: "Disabled tool", mechanism: .permanentCommand, currentScopeBytes: nil, estimatedReclaimBytes: nil, trashMoveBytes: nil, estimateBasis: "private diagnostic", scope: "/private/disabled", status: .skipped, reason: "not eligible", command: nil, argv: nil, filePath: nil, fileIdentity: nil),
+    ]
+    let report = DiscoveryReport(version: "secret-version", dryRun: true, mutationPerformed: false, candidates: candidates, notices: ["private notice"])
+    let expected = """
+    Estimated cleanup: 77.55 GB
+      Permanent cleanup: 33.96 GB
+      Move to Trash: 43.59 GB (you can undo by restoring from Trash)
+
+    Permanent:
+    - Homebrew | estimate: 346.1 MB
+    - npm | estimate: 29.47 GB
+    - Yarn Classic | estimate: 6 KB
+    - SwiftPM | estimate: 4.14 GB
+
+    Move to Trash (you can undo by restoring from Trash):
+    - Xcode DerivedData | estimate: 43.57 GB
+    - Downloads | estimate: 20 MB
+
+    This is a dry run; no files will be deleted.
+    """
+    #expect(renderReport(report) == expected)
+    #expect(!renderReport(report).contains("Disabled tool"))
+    #expect(renderPlan(ExecutionPlan(candidates: candidates.filter { $0.status == .ready })) == expected.components(separatedBy: "\n\nThis is a dry run").first)
 }
 
 @Test func derivedDataUsesDeterministicCalendarDaysAndRevalidates() throws {
