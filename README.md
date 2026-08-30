@@ -15,6 +15,27 @@ sds-clean --version
 
 Bare `sds-clean` prints a short mode summary and exits without scanning. Exactly one operational mode is required: `--dry-run` for the complete human-readable plan, `--json` for the same plan as machine-readable dry-run data, or `--delete` to show that complete all-items plan and ask one default-No confirmation. After confirmation, every captured member is revalidated: DerivedData children and eligible Downloads files move separately through macOS Trash, while neither root folder is ever moved.
 
+Example output (your results will vary):
+
+```
+$ sds-clean --dry-run
+Estimated disk cleanup: 51.56 GB
+  Permanent: 30.81 GB
+  Move to Trash: 20.75 GB (you can undo by restoring from Trash)
+
+Permanent: 30.81 GB
+- Homebrew: 372.7 MB
+- npm: 26.26 GB
+- Yarn Classic: 0 bytes
+- SwiftPM: 4.17 GB
+
+Move to Trash: 20.75 GB
+- Xcode DerivedData: 20.73 GB
+- Downloads: 21.3 MB eligible (206.5 MB total)
+
+This is a dry run; no files will be deleted.
+```
+
 Human output is a compact all-items plan with one estimate per eligible category. The Downloads row distinguishes the narrowly eligible cleanup selection from the whole folder's allocated usage. `Estimated disk cleanup` sums known permanent cleanup estimates and known allocated bytes that would move to Trash; it describes the work performed by the plan, not immediate free disk space. Categories in the execution plan with no reliable estimate remain visible as `estimate unavailable`, and the total says that unavailable estimates are additional. DerivedData and Downloads remain recoverable by restoring them from Trash.
 
 JSON schema version 5 adds the optional `totalScopeBytes` context field while retaining the other stable names. For permanent commands, `currentScopeBytes` measures only the exact command-owned cache paths in `scope`; npm is limited to its configured `_cacache`, Yarn Classic uses `yarn cache dir`, and eligible Yarn 2+ installations use the command-reported `globalFolder`. Modern Yarn runs only as direct `yarn cache clean --mirror`; its estimate is unavailable because the command removes a subset of `globalFolder` (the mirror plus bundled global-artifact hooks), never a project `.yarn/cache`, unplugged folder, install state, or Zero-Installs archive. `estimatedReclaimBytes` follows `estimateBasis` and can cover a different scope, as with Homebrew. For Trash aggregates, `currentScopeBytes`, `trashMoveBytes`, and `eligibleItemBytes` describe only the captured eligible items. Downloads additionally reports whole-folder allocated usage in `totalScopeBytes`; it is context, never added to reclaim totals. `estimatedPermanentReclaimBytes` sums known permanent cleanup estimates; `plannedTrashBytes` is a separate subtotal that remains on disk until Trash is emptied. The legacy field name `unestimatedTrashSelectionCount` counts ready Trash aggregates whose byte size is unknown.
