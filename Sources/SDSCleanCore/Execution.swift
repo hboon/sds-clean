@@ -10,16 +10,20 @@ public final class CancellationState: @unchecked Sendable {
 
 public struct Executor {
     public let home: URL; public let ownerID: UInt32; public let runner: any ProcessRunning; public let trasher: any Trashing; public let now: Date; public let calendar: Calendar
-    public init(home: URL, ownerID: UInt32 = geteuid(), runner: any ProcessRunning = DirectProcessRunner(), trasher: any Trashing = FoundationTrasher(), now: Date = Date(), calendar: Calendar = .current) { self.home = home.standardizedFileURL; self.ownerID = ownerID; self.runner = runner; self.trasher = trasher; self.now = now; self.calendar = calendar }
+    private let installationValidator: @Sendable (String, String, String, URL) -> Bool
+    public init(home: URL, ownerID: UInt32 = geteuid(), runner: any ProcessRunning = DirectProcessRunner(), trasher: any Trashing = FoundationTrasher(), now: Date = Date(), calendar: Calendar = .current, installationValidator: @escaping @Sendable (String, String, String, URL) -> Bool = installationLayoutAllowed) { self.home = home.standardizedFileURL; self.ownerID = ownerID; self.runner = runner; self.trasher = trasher; self.now = now; self.calendar = calendar; self.installationValidator = installationValidator }
 
     public func validate(_ candidate: CleanupCandidate) -> String? {
         if candidate.mechanism == .permanentCommand {
             guard let expected = candidate.command, let actual = try? identity(at: URL(fileURLWithPath: expected.path), followSymlink: true), actual.device == expected.device, actual.inode == expected.inode, actual.size == expected.size, actual.modified == expected.modified, actual.ownerID == expected.ownerID, (actual.ownerID == 0 || actual.ownerID == ownerID),
                   let definition = allowedTools.first(where: { $0.cleanupArguments == Array((candidate.argv ?? []).dropFirst()) }) else { return "command identity or allowlist changed" }
+            guard installationValidator(definition.name, expected.path, expected.path, home), secureInstallationPath(expected.path, ownerID: ownerID) else { return "command installation layout or security changed" }
+            if definition.name == "Yarn global cache", !neutralYarnConfigurationIsolated() { return "neutral Yarn configuration isolation changed" }
             let result = runner.run(executable: expected.path, arguments: definition.versionArguments, environment: probeEnvironment(home: home.path, executable: expected.path, brew: definition.name == "Homebrew"), cwd: "/")
             guard result.status == 0, result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == expected.version else { return "command version changed" }
             let help = runner.run(executable: expected.path, arguments: definition.helpArguments, environment: probeEnvironment(home: home.path, executable: expected.path, brew: definition.name == "Homebrew"), cwd: "/")
-            guard help.status == 0, (help.stdout + help.stderr).localizedCaseInsensitiveContains(definition.helpToken) else { return "command help support changed" }
+            let helpText = help.stdout + help.stderr
+            guard help.status == 0, helpText.localizedCaseInsensitiveContains(definition.helpToken), definition.requiredHelpOption.map({ helpAdvertisesExactOption(helpText, option: $0) }) ?? true else { return "command help support changed" }
             guard let scopes = candidate.cacheScopes, !scopes.isEmpty else { return "cache scope is missing" }
             let environment = probeEnvironment(home: home.path, executable: expected.path, brew: definition.name == "Homebrew")
             guard let currentPaths = resolvedCachePaths(for: definition, executable: expected.path, runner: runner, environment: environment, home: home), Set(currentPaths.map(\.path)) == Set(scopes.map(\.path)) else { return "configured cache scope changed" }

@@ -1,6 +1,12 @@
 import Darwin
 import Foundation
 
+public let isolatedYarnRCFilename = ".sds-clean-no-project-rc.yml"
+
+public func neutralYarnConfigurationIsolated() -> Bool {
+    !FileManager.default.fileExists(atPath: "/\(isolatedYarnRCFilename)") && !FileManager.default.fileExists(atPath: "/.yarnrc.yml")
+}
+
 public protocol ProcessRunning: Sendable {
     func run(executable: String, arguments: [String], environment: [String: String], cwd: String) -> ProcessResult
 }
@@ -50,7 +56,7 @@ public func sanitizedEnvironment(home: String, executable: String? = nil, brew: 
     else if executable?.contains("/.local/share/mise/shims/") == true { trustedBin = home + "/.local/share/mise/shims:" }
     else { trustedBin = "" }
     let runtimeBin = trustedNodeBin(home: home).map { $0 + ":" } ?? ""
-    var environment = ["HOME": home, "LANG": "C", "LC_ALL": "C", "NO_COLOR": "1", "DO_NOT_TRACK": "1", "PATH": trustedBin + runtimeBin + "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": NSTemporaryDirectory(), "NPM_CONFIG_AUDIT": "false", "NPM_CONFIG_FUND": "false", "NPM_CONFIG_LOGS_MAX": "0", "NPM_CONFIG_UPDATE_NOTIFIER": "false", "YARN_ENABLE_TELEMETRY": "0"]
+    var environment = ["HOME": home, "LANG": "C", "LC_ALL": "C", "NO_COLOR": "1", "DO_NOT_TRACK": "1", "PATH": trustedBin + runtimeBin + "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": NSTemporaryDirectory(), "NPM_CONFIG_AUDIT": "false", "NPM_CONFIG_FUND": "false", "NPM_CONFIG_LOGS_MAX": "0", "NPM_CONFIG_UPDATE_NOTIFIER": "false", "COREPACK_ENABLE_NETWORK": "0", "COREPACK_ENABLE_PROJECT_SPEC": "0", "YARN_ENABLE_HARDENED_MODE": "0", "YARN_ENABLE_NETWORK": "0", "YARN_ENABLE_OFFLINE_MODE": "1", "YARN_ENABLE_PROGRESS_BARS": "0", "YARN_ENABLE_SCRIPTS": "0", "YARN_ENABLE_TELEMETRY": "0", "YARN_ENABLE_TIMERS": "0", "YARN_ENABLE_TIPS": "0", "YARN_IGNORE_PATH": "1", "YARN_RC_FILENAME": isolatedYarnRCFilename]
     if brew { environment["HOMEBREW_NO_AUTO_UPDATE"] = "1"; environment["HOMEBREW_NO_ENV_HINTS"] = "1" }
     return environment
 }

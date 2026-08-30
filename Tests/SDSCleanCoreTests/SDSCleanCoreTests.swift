@@ -49,12 +49,182 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     #expect(ExitCode.success.rawValue == 0); #expect(ExitCode.usage.rawValue == 2); #expect(ExitCode.partial.rawValue == 3); #expect(ExitCode.invalidated.rawValue == 4); #expect(ExitCode.cancelled.rawValue == 130)
 }
 
-@Test func allowlistIsExactAndYarnClassicOnly() {
-    #expect(allowedTools.map(\.name) == ["Homebrew", "npm", "pnpm", "Yarn Classic", "Bun", "SwiftPM", "CocoaPods"])
+@Test func allowlistPreservesYarnClassicAndAddsModernGlobalOnly() {
+    #expect(allowedTools.map(\.name) == ["Homebrew", "npm", "pnpm", "Yarn Classic", "Yarn global cache", "Bun", "SwiftPM", "CocoaPods"])
     let yarn = allowedTools.first { $0.name == "Yarn Classic" }!
     #expect(yarn.acceptedVersion("1.22.22")); #expect(!yarn.acceptedVersion("2.4.3")); #expect(!yarn.acceptedVersion("4.1.0"))
+    let modern = allowedTools.first { $0.name == "Yarn global cache" }!
+    #expect(!modern.acceptedVersion("1.22.22")); #expect(modern.acceptedVersion("2.4.3")); #expect(modern.acceptedVersion("3.8.7")); #expect(modern.acceptedVersion("4.18.0"))
+    #expect(modern.cleanupArguments == ["cache", "clean", "--mirror"])
+    #expect(modern.cacheLocationArguments == ["config", "get", "globalFolder"])
     #expect(allowedTools.first { $0.name == "Homebrew" }!.cleanupArguments == ["cleanup", "--prune=120"])
     #expect(allowedTools.first { $0.name == "SwiftPM" }!.helpArguments == ["package", "help", "purge-cache"])
+}
+
+private func modernYarnFixture(
+    version: String = "4.18.0",
+    help: ProcessResult = ProcessResult(status: 0, stdout: "--mirror  Remove the global cache files instead of the local cache files", stderr: ""),
+    globalFolderPath: String? = nil,
+    makeGlobalFolder: Bool = true,
+    symlinkGlobalFolder: Bool = false,
+    ownerID: UInt32 = geteuid()
+) throws -> (URL, DiscoveryReport, [[String]], [[String: String]]) {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let folder = root.appendingPathComponent(".yarn/berry")
+    let launcher = root.appendingPathComponent("trusted/bin/yarn")
+    try FileManager.default.createDirectory(at: launcher.deletingLastPathComponent(), withIntermediateDirectories: true); try Data().write(to: launcher); try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
+    if makeGlobalFolder {
+        try FileManager.default.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if symlinkGlobalFolder { try FileManager.default.createSymbolicLink(at: folder, withDestinationURL: root.appendingPathComponent("elsewhere")) }
+        else { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true); try Data(repeating: 1, count: 17).write(to: folder.appendingPathComponent("cache-entry.zip")) }
+    }
+    final class Calls: @unchecked Sendable { var arguments: [[String]] = []; var environments: [[String: String]] = [] }
+    let calls = Calls()
+    let runner = FakeRunner { _, arguments, environment, cwd in
+        #expect(cwd == "/"); calls.arguments.append(arguments); calls.environments.append(environment)
+        switch arguments {
+        case ["--version"]: return ProcessResult(status: 0, stdout: version, stderr: "")
+        case ["cache", "clean", "--help"]: return help
+        case ["config", "get", "globalFolder"]: return ProcessResult(status: 0, stdout: (globalFolderPath ?? folder.path) + "\n", stderr: "")
+        default: return ProcessResult(status: 1, stdout: "", stderr: "unexpected")
+        }
+    }
+    var overrides = Dictionary(uniqueKeysWithValues: allowedTools.map { ($0.executableNames[0], [String]()) })
+    overrides["yarn-modern"] = [launcher.path]
+    let report = Discoverer(home: root, runner: runner, ownerID: ownerID, executableOverrides: overrides, installationValidator: { name, candidate, resolved, _ in name == "Yarn global cache" && candidate == launcher.path && resolved == launcher.path }).discover(version: "test")
+    return (root, report, calls.arguments, calls.environments)
+}
+
+@Test func modernYarnDiscoveryIsGlobalOnlyOfflineAndUnestimated() throws {
+    let fixture = try modernYarnFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.0) }
+    let candidate = try #require(fixture.1.candidates.first { $0.name == "Yarn global cache" })
+    #expect(candidate.scope == fixture.0.appendingPathComponent(".yarn/berry").path)
+    #expect(candidate.argv == [fixture.0.appendingPathComponent("trusted/bin/yarn").path, "cache", "clean", "--mirror"])
+    #expect(candidate.currentScopeBytes == directorySize(fixture.0.appendingPathComponent(".yarn/berry"), ownerID: geteuid()))
+    #expect(candidate.estimatedReclaimBytes == nil)
+    #expect(!fixture.2.contains(["cache", "clean", "--mirror"]))
+    #expect(fixture.3.allSatisfy { $0["YARN_ENABLE_NETWORK"] == "0" && $0["YARN_ENABLE_TELEMETRY"] == "0" && $0["YARN_IGNORE_PATH"] == "1" && $0["YARN_RC_FILENAME"] == isolatedYarnRCFilename && $0["COREPACK_ENABLE_NETWORK"] == "0" })
+}
+
+@Test func modernYarnRequiresExactMirrorHelpOption() throws {
+    #expect(helpAdvertisesExactOption("--mirror, remove global", option: "--mirror"))
+    #expect(!helpAdvertisesExactOption("--mirrorish remove global", option: "--mirror"))
+    let fixture = try modernYarnFixture(help: ProcessResult(status: 0, stdout: "--all --mirrorish", stderr: ""))
+    defer { try? FileManager.default.removeItem(at: fixture.0) }
+    #expect(!fixture.1.candidates.contains { $0.name == "Yarn global cache" })
+    #expect(fixture.1.notices.contains { $0.contains("Yarn global cache: cleanup disabled — required cleanup command is unavailable") })
+}
+
+@Test func modernYarnNeverSelectsProjectCacheOrZeroInstallsArtifacts() throws {
+    let fixture = try modernYarnFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.0) }
+    let project = fixture.0.appendingPathComponent("project")
+    for relative in [".yarn/cache/zero-install.zip", ".yarn/unplugged/pkg/data", ".yarn/install-state.gz"] {
+        let file = project.appendingPathComponent(relative); try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true); try Data([1]).write(to: file)
+    }
+    let candidate = try #require(fixture.1.candidates.first { $0.name == "Yarn global cache" })
+    #expect(candidate.cacheScopes?.allSatisfy { !$0.path.hasPrefix(project.path + "/") } == true)
+    #expect(candidate.argv?.contains("--all") == false)
+}
+
+@Test func modernYarnFailsClosedForUnsafeGlobalFolders() throws {
+    var fixture = try modernYarnFixture(globalFolderPath: "/tmp/yarn-global", makeGlobalFolder: false)
+    #expect(!fixture.1.candidates.contains { $0.name == "Yarn global cache" }); try FileManager.default.removeItem(at: fixture.0)
+    fixture = try modernYarnFixture(makeGlobalFolder: true, symlinkGlobalFolder: true)
+    #expect(!fixture.1.candidates.contains { $0.name == "Yarn global cache" }); try FileManager.default.removeItem(at: fixture.0)
+    fixture = try modernYarnFixture(makeGlobalFolder: false)
+    #expect(!fixture.1.candidates.contains { $0.name == "Yarn global cache" }); try FileManager.default.removeItem(at: fixture.0)
+    fixture = try modernYarnFixture(ownerID: 0)
+    #expect(!fixture.1.candidates.contains { $0.name == "Yarn global cache" }); try FileManager.default.removeItem(at: fixture.0)
+}
+
+@Test func modernYarnRefusesCorepackAndProjectLocalLaunchersWithoutPathLeak() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString); try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    for relative in [".asdf/shims/yarn", "project/.yarn/releases/yarn-4.18.0.cjs"] {
+        let launcher = root.appendingPathComponent(relative); try FileManager.default.createDirectory(at: launcher.deletingLastPathComponent(), withIntermediateDirectories: true); try Data().write(to: launcher); try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
+        var overrides = Dictionary(uniqueKeysWithValues: allowedTools.map { ($0.executableNames[0], [String]()) }); overrides["yarn-modern"] = [launcher.path]
+        let report = Discoverer(home: root, executableOverrides: overrides).discover(version: "test")
+        #expect(!report.candidates.contains { $0.name == "Yarn global cache" })
+        let json = String(decoding: try JSONEncoder().encode(report), as: UTF8.self)
+        #expect(!json.contains(launcher.path)); #expect(json.contains("installation layout is not supported"))
+    }
+}
+
+@Test func modernYarnActionValidationDetectsVersionPathAndIdentityDriftAndUsesDirectArgv() throws {
+    let fixture = try modernYarnFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.0) }
+    let candidate = try #require(fixture.1.candidates.first { $0.name == "Yarn global cache" })
+    final class Calls: @unchecked Sendable { var arguments: [[String]] = [] }
+    func runner(version: String = "4.18.0", folder: String? = nil, calls: Calls = Calls()) -> (FakeRunner, Calls) {
+        let fake = FakeRunner { _, arguments, environment, cwd in
+            #expect(cwd == "/"); #expect(environment["YARN_ENABLE_NETWORK"] == "0"); calls.arguments.append(arguments)
+            switch arguments {
+            case ["--version"]: return ProcessResult(status: 0, stdout: version, stderr: "")
+            case ["cache", "clean", "--help"]: return ProcessResult(status: 0, stdout: "--mirror Remove global cache", stderr: "")
+            case ["config", "get", "globalFolder"]: return ProcessResult(status: 0, stdout: (folder ?? candidate.scope) + "\n", stderr: "")
+            case ["cache", "clean", "--mirror"]: return ProcessResult(status: 0, stdout: "", stderr: "")
+            default: return ProcessResult(status: 1, stdout: "", stderr: "unexpected")
+            }
+        }
+        return (fake, calls)
+    }
+    var pair = runner(version: "4.18.1")
+    let acceptFixtureYarn: @Sendable (String, String, String, URL) -> Bool = { name, candidatePath, resolved, _ in name == "Yarn global cache" && candidatePath == candidate.command?.path && resolved == candidate.command?.path }
+    #expect(Executor(home: fixture.0, runner: pair.0, installationValidator: acceptFixtureYarn).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState()).first?.kind == .invalidated)
+    #expect(!pair.1.arguments.contains(["cache", "clean", "--mirror"]))
+    let changed = fixture.0.appendingPathComponent(".yarn/changed"); try FileManager.default.createDirectory(at: changed, withIntermediateDirectories: true)
+    pair = runner(folder: changed.path)
+    #expect(Executor(home: fixture.0, runner: pair.0, installationValidator: acceptFixtureYarn).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState()).first?.detail == "configured cache scope changed")
+    #expect(!pair.1.arguments.contains(["cache", "clean", "--mirror"]))
+    let scope = try #require(candidate.cacheScopes?.first)
+    let wrongMountIdentity = FileIdentity(device: scope.identity.device &+ 1, inode: scope.identity.inode, size: scope.identity.size, modified: scope.identity.modified, ownerID: scope.identity.ownerID)
+    let wrongMount = CleanupCandidate(id: candidate.id, name: candidate.name, mechanism: candidate.mechanism, currentScopeBytes: candidate.currentScopeBytes, estimatedReclaimBytes: candidate.estimatedReclaimBytes, trashMoveBytes: candidate.trashMoveBytes, estimateBasis: candidate.estimateBasis, scope: candidate.scope, status: candidate.status, reason: candidate.reason, command: candidate.command, argv: candidate.argv, cacheScopes: [CacheScopeIdentity(path: scope.path, identity: wrongMountIdentity)], filePath: nil, fileIdentity: nil)
+    pair = runner()
+    #expect(Executor(home: fixture.0, runner: pair.0, installationValidator: acceptFixtureYarn).execute(ExecutionPlan(candidates: [wrongMount]), cancellation: CancellationState()).first?.detail == "cache scope identity, ownership, mount, or containment changed")
+    #expect(!pair.1.arguments.contains(["cache", "clean", "--mirror"]))
+    let originalFolder = fixture.0.appendingPathComponent(".yarn/berry"); let movedFolder = fixture.0.appendingPathComponent(".yarn/berry-old")
+    try FileManager.default.moveItem(at: originalFolder, to: movedFolder); try FileManager.default.createDirectory(at: originalFolder, withIntermediateDirectories: true)
+    pair = runner()
+    #expect(Executor(home: fixture.0, runner: pair.0, installationValidator: acceptFixtureYarn).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState()).first?.kind == .invalidated)
+    #expect(!pair.1.arguments.contains(["cache", "clean", "--mirror"]))
+
+    let refreshedFixture = try modernYarnFixture(); defer { try? FileManager.default.removeItem(at: refreshedFixture.0) }
+    let refreshed = try #require(refreshedFixture.1.candidates.first { $0.name == "Yarn global cache" }); pair = runner(folder: refreshed.scope)
+    let acceptRefreshedYarn: @Sendable (String, String, String, URL) -> Bool = { name, candidatePath, resolved, _ in name == "Yarn global cache" && candidatePath == refreshed.command?.path && resolved == refreshed.command?.path }
+    let outcome = try #require(Executor(home: refreshedFixture.0, runner: pair.0, installationValidator: acceptRefreshedYarn).execute(ExecutionPlan(candidates: [refreshed]), cancellation: CancellationState()).first)
+    #expect(outcome.kind == .commandSucceeded); #expect(pair.1.arguments.last == ["cache", "clean", "--mirror"])
+    #expect(FileManager.default.fileExists(atPath: refreshedFixture.0.appendingPathComponent(".yarn/berry/cache-entry.zip").path))
+}
+
+@Test func yarnClassicAndModernAliasesDeduplicateIdenticalCommandOwnedScope() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString); let cache = root.appendingPathComponent("shared-yarn-cache")
+    try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: root) }
+    let launcher = root.appendingPathComponent("trusted/bin/yarn"); try FileManager.default.createDirectory(at: launcher.deletingLastPathComponent(), withIntermediateDirectories: true); try Data().write(to: launcher); try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
+    final class State: @unchecked Sendable { var versionCalls = 0 }
+    let state = State()
+    let runner = FakeRunner { _, arguments, _, _ in
+        if arguments == ["--version"] { state.versionCalls += 1; return ProcessResult(status: 0, stdout: state.versionCalls == 1 ? "1.22.19" : "4.18.0", stderr: "") }
+        if arguments == ["cache", "--help"] { return ProcessResult(status: 0, stdout: "cache clean", stderr: "") }
+        if arguments == ["cache", "dir"] { return ProcessResult(status: 0, stdout: cache.path + "\n", stderr: "") }
+        if arguments == ["cache", "clean", "--help"] { return ProcessResult(status: 0, stdout: "--mirror Remove global cache", stderr: "") }
+        if arguments == ["config", "get", "globalFolder"] { return ProcessResult(status: 0, stdout: cache.path + "\n", stderr: "") }
+        return ProcessResult(status: 1, stdout: "", stderr: "unexpected")
+    }
+    var overrides = Dictionary(uniqueKeysWithValues: allowedTools.map { ($0.executableNames[0], [String]()) })
+    overrides["yarn"] = [launcher.path]; overrides["yarn-modern"] = [launcher.path]
+    let report = Discoverer(home: root, runner: runner, executableOverrides: overrides, installationValidator: { _, candidate, resolved, _ in candidate == launcher.path && resolved == launcher.path }).discover(version: "test")
+    #expect(report.candidates.filter { $0.scope == cache.path }.count == 1)
+    #expect(report.notices.contains { $0.contains("duplicate command-owned cache scope") })
+}
+
+@Test func pnpmContractRemainsPruneOnlyAndUnestimated() throws {
+    let pnpm = try #require(allowedTools.first { $0.name == "pnpm" })
+    #expect(pnpm.cleanupArguments == ["store", "prune"])
+    if case .unavailable = pnpm.estimate {} else { Issue.record("pnpm estimate must remain unavailable") }
+    #expect(pnpm.cachePaths == ["Library/pnpm/store", ".local/share/pnpm/store"])
 }
 
 @Test func commandReportedCacheScopesAreExactAndContained() throws {
@@ -256,7 +426,7 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
         if arguments == ["config", "get", "cache"] { return ProcessResult(status: 0, stdout: changed.deletingLastPathComponent().path + "\n", stderr: "") }
         calls.cleanupRan = true; return ProcessResult(status: 0, stdout: "", stderr: "")
     }
-    let outcome = try #require(Executor(home: root, ownerID: geteuid(), runner: runner).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState()).first)
+    let outcome = try #require(Executor(home: root, ownerID: geteuid(), runner: runner, installationValidator: { _, candidatePath, resolved, _ in candidatePath == executable && resolved == executable }).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState()).first)
     #expect(outcome.kind == .invalidated); #expect(outcome.detail == "configured cache scope changed"); #expect(!calls.cleanupRan)
     try FileManager.default.removeItem(at: root)
 }
@@ -266,6 +436,8 @@ private func toolFixture(id: Int, name: String, bytes: UInt64?, scope: String, c
     #expect(installationLayoutAllowed(name: "Homebrew", launcher: "/opt/homebrew/bin/brew", resolved: "/opt/homebrew/bin/brew", home: home))
     #expect(installationLayoutAllowed(name: "npm", launcher: "/usr/local/bin/npm", resolved: "/usr/local/lib/node_modules/npm/bin/npm-cli.js", home: home))
     #expect(installationLayoutAllowed(name: "Yarn Classic", launcher: "/opt/homebrew/bin/yarn", resolved: "/opt/homebrew/Cellar/yarn/1.22.22/bin/yarn", home: home))
+    #expect(installationLayoutAllowed(name: "Yarn global cache", launcher: "/usr/bin/yarn", resolved: "/usr/bin/yarn", home: home))
+    #expect(!installationLayoutAllowed(name: "Yarn global cache", launcher: "/opt/homebrew/bin/yarn", resolved: "/opt/homebrew/lib/node_modules/corepack/dist/yarn.js", home: home))
     #expect(installationLayoutAllowed(name: "pnpm", launcher: "/Users/tester/.asdf/shims/pnpm", resolved: "/Users/tester/.asdf/shims/pnpm", home: home))
     #expect(installationLayoutAllowed(name: "pnpm", launcher: "/Users/tester/.local/share/mise/shims/pnpm", resolved: "/Users/tester/.local/share/mise/shims/pnpm", home: home))
     #expect(!installationLayoutAllowed(name: "pnpm", launcher: "/Users/tester/bin/pnpm", resolved: "/tmp/pnpm", home: home))
