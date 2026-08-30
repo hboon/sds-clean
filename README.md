@@ -35,3 +35,7 @@ The package has no third-party dependencies. Tests use injected process and Tras
 ## Future Homebrew work
 
 A future release can add a separate public repository/tag, checksummed release artifact, tap/formula, installation test, and eventual homebrew/core proposal. None of that publishing or tap work is part of 0.1.0.
+
+## License
+
+sds-clean is released under the [MIT License](LICENSE).
