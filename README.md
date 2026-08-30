@@ -44,10 +44,16 @@ Modern Yarn support is deliberately narrower than executable discovery. The exec
 
 Downloads eligibility remains narrow: current-user-owned, non-symlink, regular top-level files older than 30 days with supported installer/archive suffixes. Nested, hidden, partial-download, package, alias, young, and unrelated files are excluded. Downloads access may be denied by macOS privacy controls; do not grant Full Disk Access or use sudo for this tool. Tool notices distinguish an absent supported executable, unsupported installation layout, failed version probe, unrecognized version output, unavailable cleanup command, and an absent eligible cache scope. In every disabled state, no tool cleanup command runs.
 
+## Install with Homebrew
+
+```sh
+brew install hboon/tap/sds-clean
+```
+
 ## Install from source
 
-There is no Homebrew formula for 0.1.0. Clone the repository and build the
-release executable with Swift Package Manager:
+Clone the repository and build the release executable with Swift Package
+Manager:
 
 ```sh
 git clone https://github.com/hboon/sds-clean.git
