@@ -23,6 +23,25 @@ Modern Yarn support is deliberately narrower than executable discovery. The exec
 
 Downloads eligibility remains narrow: current-user-owned, non-symlink, regular top-level files older than 30 days with supported installer/archive suffixes. Nested, hidden, partial-download, package, alias, young, and unrelated files are excluded. Downloads access may be denied by macOS privacy controls; do not grant Full Disk Access or use sudo for this tool. Tool notices distinguish an absent supported executable, unsupported installation layout, failed version probe, unrecognized version output, unavailable cleanup command, and an absent eligible cache scope. In every disabled state, no tool cleanup command runs.
 
+## Install from source
+
+There is no Homebrew formula for 0.1.0. Clone the repository and build the
+release executable with Swift Package Manager:
+
+```sh
+git clone https://github.com/hboon/sds-clean.git
+cd sds-clean
+swift build -c release
+.build/release/sds-clean --version
+```
+
+Run the executable in place, copy it to a directory already on your `PATH`, or
+invoke it by its full path. Installation does not require sudo.
+
+The package uses Swift tools version 6.2. Building currently requires a Swift
+6.2 toolchain; the supported Apple build host is Xcode 26. Older Xcode releases
+that do not provide Swift 6.2 cannot build this version.
+
 ## Development
 
 ```sh
@@ -31,10 +50,6 @@ swift build -c release
 ```
 
 The package has no third-party dependencies. Tests use injected process and Trash boundaries and never clean real caches or empty Trash.
-
-## Future Homebrew work
-
-A future release can add a separate public repository/tag, checksummed release artifact, tap/formula, installation test, and eventual homebrew/core proposal. None of that publishing or tap work is part of 0.1.0.
 
 ## License
 
