@@ -6,7 +6,7 @@ public func shouldShowTrashInspectionReminder(_ outcomes: [ItemOutcome]) -> Bool
     }
 }
 
-public let sdsCleanVersion = "0.1.0"
+public let sdsCleanVersion = "0.1.1"
 public let promoURL = "https://motionobj.com/simplydisksweeper/?utm_source=sds-clean&utm_medium=cli&utm_campaign=cleanup-success"
 
 public let modeSummary = """

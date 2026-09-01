@@ -1,6 +1,6 @@
 # sds-clean
 
-`sds-clean` 0.1.0 is a local macOS cleanup CLI. It checks a set of tool-managed caches, eligible Xcode DerivedData children (not modified today or yesterday), and eligible installer/archive files in Downloads.
+`sds-clean` 0.1.1 is a local macOS cleanup CLI. It checks a set of tool-managed caches, eligible Xcode DerivedData children (not modified today or yesterday), and eligible installer/archive files in Downloads.
 
 It does not scan Home generally, or include telemetry.
 
