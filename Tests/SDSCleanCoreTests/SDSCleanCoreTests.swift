@@ -396,17 +396,54 @@ private func modernYarnFixture(
     #expect(snapshot == #"{"candidates":[],"dryRun":true,"estimatedPermanentReclaimBytes":0,"mutationPerformed":false,"notices":[],"plannedTrashBytes":0,"schemaVersion":5,"unestimatedPermanentCandidateCount":0,"unestimatedTrashSelectionCount":0,"version":"0.1.0"}"#)
 }
 
-@Test func helpDriftInvalidatesBeforeCommandExecution() throws {
+@Test func acceptedSwiftPMPlanDoesNotReprobeHelpBeforeCommandExecution() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let cache = root.appendingPathComponent("Library/Caches/org.swift.swiftpm"); try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
     let executable = "/usr/bin/swift"; let executableIdentity = try identity(at: URL(fileURLWithPath: executable), followSymlink: true); let cacheIdentity = try identity(at: cache)
     let candidate = toolFixture(id: 1, name: "SwiftPM", bytes: 0, scope: cache.path, command: CommandIdentity(path: executable, device: executableIdentity.device, inode: executableIdentity.inode, size: executableIdentity.size, modified: executableIdentity.modified, ownerID: executableIdentity.ownerID, version: "Apple Swift version 6.2"), argv: [executable, "package", "purge-cache"], cacheScopes: [CacheScopeIdentity(path: cache.path, identity: cacheIdentity)])
     final class Arguments: @unchecked Sendable { var values: [[String]] = [] }
     let arguments = Arguments()
-    let runner = FakeRunner { _, received, _, _ in arguments.values.append(received); return received == ["--version"] ? ProcessResult(status: 0, stdout: "Apple Swift version 6.2\n", stderr: "") : ProcessResult(status: 0, stdout: "no matching subcommand", stderr: "") }
-    let outcomes = Executor(home: root, ownerID: geteuid(), runner: runner).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState())
-    #expect(outcomes.first?.kind == .invalidated); #expect(!arguments.values.contains(["package", "purge-cache"]))
-    try FileManager.default.removeItem(at: root)
+    let runner = FakeRunner { _, received, _, _ in
+        arguments.values.append(received)
+        if received == ["--version"] { return ProcessResult(status: 0, stdout: "Apple Swift version 6.2\n", stderr: "") }
+        if received == ["package", "help", "purge-cache"] { return ProcessResult(status: 1, stdout: "", stderr: "error: unknown option") }
+        if received == ["package", "purge-cache"] { return ProcessResult(status: 0, stdout: "", stderr: "") }
+        return ProcessResult(status: 1, stdout: "", stderr: "unexpected")
+    }
+    let outcome = try #require(Executor(home: root, ownerID: geteuid(), runner: runner).execute(ExecutionPlan(candidates: [candidate]), cancellation: CancellationState()).first)
+    #expect(outcome.kind == .commandSucceeded)
+    #expect(arguments.values.contains(["package", "purge-cache"]))
+    #expect(!arguments.values.contains(["package", "help", "purge-cache"]))
+}
+
+@Test func unchangedSwiftPMAndTrashAggregateProceedWithoutExecutionTimeHelpProbe() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let cache = root.appendingPathComponent("Library/Caches/org.swift.swiftpm")
+    let downloads = root.appendingPathComponent("Downloads")
+    try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let archive = downloads.appendingPathComponent("old.zip"); try Data([1]).write(to: archive)
+    try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-31 * 86_400)], ofItemAtPath: archive.path)
+    let executable = "/usr/bin/swift"; let executableIdentity = try identity(at: URL(fileURLWithPath: executable), followSymlink: true)
+    let swiftPM = toolFixture(id: 1, name: "SwiftPM", bytes: 0, scope: cache.path, command: CommandIdentity(path: executable, device: executableIdentity.device, inode: executableIdentity.inode, size: executableIdentity.size, modified: executableIdentity.modified, ownerID: executableIdentity.ownerID, version: "Apple Swift version 6.2"), argv: [executable, "package", "purge-cache"], cacheScopes: [CacheScopeIdentity(path: cache.path, identity: try identity(at: cache))])
+    let memberIdentity = try identity(at: archive)
+    let downloadsCandidate = CleanupCandidate(id: 2, name: "Downloads", mechanism: .moveToTrash, currentScopeBytes: memberIdentity.size, estimatedReclaimBytes: nil, trashMoveBytes: memberIdentity.size, estimateBasis: "1 eligible item", scope: downloads.path, status: .ready, reason: nil, command: nil, argv: nil, cacheScopes: nil, filePath: nil, fileIdentity: nil, eligibleItemCount: 1, eligibleItemBytes: memberIdentity.size, executionMembers: [TrashMember(path: archive.path, identity: memberIdentity, bytes: memberIdentity.size)])
+    final class Arguments: @unchecked Sendable { var values: [[String]] = [] }
+    let arguments = Arguments(); let trasher = RecordingTrasher()
+    let runner = FakeRunner { _, received, _, _ in
+        arguments.values.append(received)
+        if received == ["--version"] { return ProcessResult(status: 0, stdout: "Apple Swift version 6.2\n", stderr: "") }
+        if received == ["package", "purge-cache"] { return ProcessResult(status: 0, stdout: "", stderr: "") }
+        return ProcessResult(status: 1, stdout: "", stderr: "execution-time help probe would fail")
+    }
+    let outcomes = Executor(home: root, ownerID: geteuid(), runner: runner, trasher: trasher).execute(ExecutionPlan(candidates: [swiftPM, downloadsCandidate]), cancellation: CancellationState())
+    #expect(outcomes.map(\.kind) == [.commandSucceeded, .trashed])
+    #expect(arguments.values.contains(["package", "purge-cache"]))
+    #expect(!arguments.values.contains(["package", "help", "purge-cache"]))
+    #expect(trasher.paths == [archive.path])
+    #expect(outcomes[1].detail.contains("moved separately to Trash"))
 }
 
 @Test func configuredCacheScopeDriftInvalidatesBeforeCleanup() throws {
