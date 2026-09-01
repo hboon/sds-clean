@@ -628,6 +628,29 @@ private func pnpmFixture(result: ProcessResult, cache: Bool = true, helpResult: 
     try FileManager.default.removeItem(at: root)
 }
 
+@Test func directProcessRunnerWaitsForLateStdoutAndStderr() {
+    let result = DirectProcessRunner().run(
+        executable: "/bin/sh",
+        arguments: ["-c", "printf 'stdout-first\\n'; printf 'stderr-first\\n' >&2; sleep 0.05; printf 'stdout-late\\n'; printf 'stderr-late\\n' >&2"],
+        environment: sanitizedEnvironment(home: FileManager.default.homeDirectoryForCurrentUser.path),
+        cwd: "/"
+    )
+    #expect(result.status == 0)
+    #expect(result.stdout == "stdout-first\nstdout-late\n")
+    #expect(result.stderr == "stderr-first\nstderr-late\n")
+}
+
+@Test func trashInspectionReminderRequiresAnActualTrashMove() {
+    let notRun = ItemOutcome(candidateID: 1, kind: .notRun, exitCode: nil, detail: "not run", succeededItemCount: 0, failedItemCount: 0, notRunItemCount: 2)
+    let invalidated = ItemOutcome(candidateID: 2, kind: .invalidated, exitCode: nil, detail: "drift")
+    let partialMove = ItemOutcome(candidateID: 3, kind: .commandFailed, exitCode: nil, detail: "partial", succeededItemCount: 1, failedItemCount: 1, notRunItemCount: 0)
+    let trashed = ItemOutcome(candidateID: 4, kind: .trashed, exitCode: nil, detail: "moved")
+    #expect(!shouldShowTrashInspectionReminder([]))
+    #expect(!shouldShowTrashInspectionReminder([notRun, invalidated]))
+    #expect(shouldShowTrashInspectionReminder([partialMove]))
+    #expect(shouldShowTrashInspectionReminder([trashed]))
+}
+
 @Test func anyPlanDriftPreventsEarlierValidTrashItem() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let downloads = root.appendingPathComponent("Downloads"); try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)

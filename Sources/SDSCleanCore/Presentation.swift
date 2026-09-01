@@ -1,5 +1,11 @@
 import Foundation
 
+public func shouldShowTrashInspectionReminder(_ outcomes: [ItemOutcome]) -> Bool {
+    outcomes.contains { outcome in
+        outcome.kind == .trashed || (outcome.succeededItemCount ?? 0) > 0
+    }
+}
+
 public let sdsCleanVersion = "0.1.0"
 public let promoURL = "https://motionobj.com/simplydisksweeper/?utm_source=sds-clean&utm_medium=cli&utm_campaign=cleanup-success"
 

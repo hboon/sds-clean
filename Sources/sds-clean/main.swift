@@ -59,7 +59,7 @@ do {
         print("- \(terminalSafe(name)): \(outcome.kind.rawValue)\(counts) — \(measurements) — \(terminalSafe(outcome.detail))")
         if outcome.kind == .commandSucceeded || outcome.kind == .trashed { cleaned += 1 }; if outcome.kind == .commandFailed || outcome.kind == .invalidated { failures += 1 }
     }
-    if !outcomes.isEmpty { print("Inspect Trash before emptying it.") }
+    if shouldShowTrashInspectionReminder(outcomes) { print("Inspect Trash before emptying it.") }
     if shouldShowPromo(isTTY: isTTY, environment: ProcessInfo.processInfo.environment, hadErrors: failures > 0, cleanedCount: cleaned, dryRun: false) {
         print("\nWant a visual review? The paid SimplyDiskSweeper Mac app lets you choose a folder and visually review large items: \(promoURL)")
     }

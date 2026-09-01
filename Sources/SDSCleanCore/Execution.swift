@@ -23,7 +23,9 @@ public struct Executor {
             guard result.status == 0, result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == expected.version else { return "command version changed" }
             let help = runner.run(executable: expected.path, arguments: definition.helpArguments, environment: probeEnvironment(home: home.path, executable: expected.path, brew: definition.name == "Homebrew"), cwd: "/")
             let helpText = help.stdout + help.stderr
-            guard help.status == 0, helpText.localizedCaseInsensitiveContains(definition.helpToken), definition.requiredHelpOption.map({ helpAdvertisesExactOption(helpText, option: $0) }) ?? true else { return "command help support changed" }
+            guard help.status == 0, helpText.localizedCaseInsensitiveContains(definition.helpToken), definition.requiredHelpOption.map({ helpAdvertisesExactOption(helpText, option: $0) }) ?? true else {
+                return "command help support changed (exit \(help.status), captured \(helpText.utf8.count) bytes)"
+            }
             guard let scopes = candidate.cacheScopes, !scopes.isEmpty else { return "cache scope is missing" }
             let environment = probeEnvironment(home: home.path, executable: expected.path, brew: definition.name == "Homebrew")
             guard let currentPaths = resolvedCachePaths(for: definition, executable: expected.path, runner: runner, environment: environment, home: home), Set(currentPaths.map(\.path)) == Set(scopes.map(\.path)) else { return "configured cache scope changed" }

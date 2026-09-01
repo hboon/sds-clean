@@ -17,18 +17,23 @@ public struct DirectProcessRunner: ProcessRunning {
     public func run(executable: String, arguments: [String], environment: [String: String], cwd: String) -> ProcessResult {
         final class Collector: @unchecked Sendable {
             private let lock = NSLock(); private var data = Data(); private let limit = 64 * 1024
-            func append(_ chunk: Data) { lock.lock(); defer { lock.unlock() }; if data.count < limit { data.append(chunk.prefix(limit - data.count)) } }
+            func drain(_ handle: FileHandle) {
+                while let chunk = try? handle.read(upToCount: 8 * 1024), !chunk.isEmpty {
+                    lock.lock(); if data.count < limit { data.append(chunk.prefix(limit - data.count)) }; lock.unlock()
+                }
+            }
             func string() -> String { lock.lock(); defer { lock.unlock() }; return String(decoding: data, as: UTF8.self) }
         }
         let process = Process(); let output = Pipe(); let error = Pipe(); let outputCollector = Collector(); let errorCollector = Collector()
         process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments
         process.environment = environment; process.currentDirectoryURL = URL(fileURLWithPath: cwd)
         process.standardOutput = output; process.standardError = error
-        output.fileHandleForReading.readabilityHandler = { handle in outputCollector.append(handle.availableData) }
-        error.fileHandleForReading.readabilityHandler = { handle in errorCollector.append(handle.availableData) }
-        do { try process.run(); process.waitUntilExit() } catch { return ProcessResult(status: 127, stdout: "", stderr: String(describing: error)) }
-        output.fileHandleForReading.readabilityHandler = nil; error.fileHandleForReading.readabilityHandler = nil
-        outputCollector.append(output.fileHandleForReading.readDataToEndOfFile()); errorCollector.append(error.fileHandleForReading.readDataToEndOfFile())
+        do { try process.run() } catch { return ProcessResult(status: 127, stdout: "", stderr: String(describing: error)) }
+        let readers = DispatchGroup()
+        readers.enter(); DispatchQueue.global().async { outputCollector.drain(output.fileHandleForReading); readers.leave() }
+        readers.enter(); DispatchQueue.global().async { errorCollector.drain(error.fileHandleForReading); readers.leave() }
+        process.waitUntilExit()
+        readers.wait()
         return ProcessResult(status: process.terminationStatus, stdout: outputCollector.string(), stderr: errorCollector.string())
     }
 }
